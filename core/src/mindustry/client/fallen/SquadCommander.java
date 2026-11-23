@@ -525,7 +525,8 @@ public class SquadCommander{
 
     /** Юнит сейчас стоит на линии и слушает приказы линии: не лечится, не бьёт цель фокуса, не уступает дорогу. */
     private static boolean holding(Squad s, Member m){
-        return m.state == State.hold && !m.yielding && !s.retreatAll && !s.focusIds.contains(m.id);
+        //юнита, которого UnitClearLogic уводит со стройки, не тянем обратно в слот
+        return m.state == State.hold && !m.yielding && !s.retreatAll && !s.focusIds.contains(m.id) && !UnitClearLogic.isClearing(m.id);
     }
 
     private static void slotPoint(Squad s, float f, float rankOffset, Vec2 fw, Vec2 c, Vec2 out){
@@ -979,7 +980,7 @@ public class SquadCommander{
             g.done = false;
         }
         for(Member m : s.members){
-            if(s.focusIds.contains(m.id) && m.state == State.hold && !s.retreatAll && !m.yielding) order(m.id, m.slotX, m.slotY, null);
+            if(s.focusIds.contains(m.id) && m.state == State.hold && !s.retreatAll && !m.yielding && !UnitClearLogic.isClearing(m.id)) order(m.id, m.slotX, m.slotY, null);
         }
         s.focusIds.clear();
     }

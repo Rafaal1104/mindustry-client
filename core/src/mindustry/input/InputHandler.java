@@ -2070,13 +2070,14 @@ public abstract class InputHandler implements InputProcessor, GestureListener{
                 }
             }
 
-            boolean valid = validPlace(plan.x, plan.y, plan.block, plan.rotation, null, true)
+            boolean placeableIgnoringUnits = validPlace(plan.x, plan.y, plan.block, plan.rotation, null, true);
+            boolean valid = placeableIgnoringUnits
                 || (state.rules.editor && plan.block instanceof OreBlock o && o.wallOre) //Always allow placing wall ores in editor mode, because there might be a wall in the plans that makes it valid
                 || blockedOnlyByQueuedBreak(plan, flushBreaking);
-            // The tile itself is free and no plans overlap: only friendly units are in the way.
-            // Order them aside via RTS and queue the plan; builders will start once the footprint is clear.
-            if(!valid && !freeze && validPlace(plan.x, plan.y, plan.block, plan.rotation, null, true)){
-                valid = UnitClearLogic.clearPlan(plan);
+            // The tile itself is free and no plans overlap: only units are in the way.
+            // Order friendly AI units aside right away and queue the plan; builders start once the footprint is clear.
+            if(!freeze && placeableIgnoringUnits && !Build.checkNoUnitOverlap(plan.block, plan.x, plan.y)){
+                UnitClearLogic.clearPlan(plan);
             }
             if(cleanup && !valid){
                 BuildPlan copy = plan.copy();
