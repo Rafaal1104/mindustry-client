@@ -176,6 +176,14 @@ object Main : ApplicationListener {
                 is FocusMarkTransmission -> {
                     if (senderId != communicationSystem.id) Core.app.post { mindustry.client.fallen.FocusMarks.receive(transmission, senderId) }
                 }
+
+                is PingTransmission -> {
+                    if (senderId != communicationSystem.id) Core.app.post { mindustry.client.fallen.MapPings.receive(transmission, senderId) }
+                }
+
+                is GriefMarkTransmission -> {
+                    if (senderId != communicationSystem.id) Core.app.post { mindustry.client.fallen.GriefReports.receive(transmission, senderId) }
+                }
             }
         }
 

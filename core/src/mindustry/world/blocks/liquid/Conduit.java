@@ -58,11 +58,6 @@ public class Conduit extends LiquidBlock implements Autotiler{
     }
 
     @Override
-    public boolean canReplace(Block other){
-        return super.canReplace(other) && !(other instanceof ItemBridge) && !(other instanceof DirectionBridge);
-    }
-
-    @Override
     public void init(){
         super.init();
 
@@ -128,7 +123,7 @@ public class Conduit extends LiquidBlock implements Autotiler{
     public Block getReplacement(BuildPlan req, Seq<BuildPlan> plans){
         if(junctionReplacement == null) return this;
 
-        Boolf<Point2> cont = p -> plans.contains(o -> o.x == req.x + p.x && o.y == req.y + p.y && (req.block instanceof Conduit || req.block instanceof LiquidJunction));
+        Boolf<Point2> cont = p -> plans.contains(o -> o.x == req.x + p.x && o.y == req.y + p.y && (o.block instanceof Conduit || o.block instanceof LiquidJunction));
         return cont.get(Geometry.d4(req.rotation)) &&
             cont.get(Geometry.d4(req.rotation - 2)) &&
             req.tile() != null &&
@@ -156,8 +151,6 @@ public class Conduit extends LiquidBlock implements Autotiler{
             Placement.calculateBridges(plans, (ItemBridge)bridgeReplacement, true, b -> b instanceof Conduit);
         }
 
-        // calculateBridges may still mark a liquid bridge on a belt tile — drop those
-        plans.removeAll(p -> p.block instanceof LiquidBridge && isBeltObstacle(p));
     }
 
     private static boolean isBeltObstacle(BuildPlan p){
@@ -165,7 +158,7 @@ public class Conduit extends LiquidBlock implements Autotiler{
         if(t == null) return false;
         Block b = t.block();
         return Placement.isLowTierConveyor(b) || Placement.isStackConveyorLine(b)
-            || b == Blocks.itemBridge || b == Blocks.phaseConveyor;
+            || b instanceof Duct || b == Blocks.itemBridge || b == Blocks.phaseConveyor || b instanceof DuctBridge;
     }
 
     @Override
@@ -186,7 +179,6 @@ public class Conduit extends LiquidBlock implements Autotiler{
         @Override
         public void draw(){
             draw(false);
-            mindustry.client.morj.DuctMarks.mark(this);
         }
 
         public void draw(boolean under){

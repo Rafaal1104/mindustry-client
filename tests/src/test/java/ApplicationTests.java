@@ -24,8 +24,12 @@ import mindustry.net.*;
 import mindustry.net.Packets.*;
 import mindustry.type.*;
 import mindustry.world.*;
+import mindustry.world.blocks.distribution.ItemBridge.ItemBridgeBuild;
 import mindustry.world.blocks.payloads.*;
 import mindustry.world.blocks.storage.*;
+import mindustry.world.blocks.storage.CoreBlock.*;
+import mindustry.world.blocks.storage.StorageBlock.*;
+import mindustry.world.modules.*;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.*;
 import org.junit.jupiter.params.provider.*;
@@ -369,6 +373,78 @@ public class ApplicationTests{
                     tile.build.update();
                 }
             }
+        }
+    }
+
+    private void loadFlatPlacementMap(){
+        world.loadGenerator(16, 16, tiles -> {
+            for(int x = 0; x < tiles.width; x++){
+                for(int y = 0; y < tiles.height; y++){
+                    tiles.set(x, y, new Tile(x, y, Blocks.sand, Blocks.air, Blocks.air));
+                }
+            }
+        });
+        state.set(State.playing);
+    }
+
+    @Test
+    void conduitLineBridgesConveyorWithoutReplacingIt(){
+        loadFlatPlacementMap();
+        Player previous = player;
+        player = Player.create();
+        player.team(Team.sharded);
+        try{
+            world.tile(5, 5).setBlock(Blocks.conveyor, Team.sharded, 1);
+            Seq<BuildPlan> plans = Seq.with(new BuildPlan(4, 5, 0, Blocks.conduit),
+                new BuildPlan(5, 5, 0, Blocks.conduit), new BuildPlan(6, 5, 0, Blocks.conduit));
+
+            Blocks.conduit.handlePlacementLine(plans);
+
+            assertEquals(2, plans.size);
+            assertSame(Blocks.bridgeConduit, plans.first().block);
+            assertSame(Blocks.bridgeConduit, plans.peek().block);
+            assertEquals(new Point2(2, 0), plans.first().config);
+            assertSame(Blocks.conveyor, world.tile(5, 5).block());
+        }finally{
+            player = previous;
+        }
+    }
+
+    @Test
+    void conduitCanReplaceLiquidBridge(){
+        loadFlatPlacementMap();
+        Tile tile = world.tile(5, 5);
+        for(Block bridge : new Block[]{Blocks.bridgeConduit, Blocks.phaseConduit, Blocks.reinforcedBridgeConduit}){
+            tile.setBlock(bridge, Team.sharded, 1);
+            assertTrue(Build.validPlace(Blocks.conduit, Team.sharded, tile.x, tile.y, 0), bridge.name);
+        }
+        tile.setBlock(Blocks.itemBridge, Team.sharded);
+        assertFalse(Build.validPlace(Blocks.conduit, Team.sharded, tile.x, tile.y, 0));
+    }
+
+    @Test
+    void titaniumConveyorBridgesOverExistingBridgeEndpoint(){
+        loadFlatPlacementMap();
+        Player previous = player;
+        player = Player.create();
+        player.team(Team.sharded);
+        try{
+            world.tile(10, 8).setBlock(Blocks.plastaniumConveyor, Team.sharded, 1);
+            world.tile(11, 8).setBlock(Blocks.itemBridge, Team.sharded);
+            world.tile(11, 11).setBlock(Blocks.itemBridge, Team.sharded);
+            world.tile(11, 8).build.configureAny(Point2.pack(11, 11));
+            Seq<BuildPlan> belt = Seq.with(new BuildPlan(9, 8, 0, Blocks.titaniumConveyor),
+                new BuildPlan(10, 8, 0, Blocks.titaniumConveyor), new BuildPlan(11, 8, 0, Blocks.titaniumConveyor),
+                new BuildPlan(12, 8, 0, Blocks.titaniumConveyor), new BuildPlan(13, 8, 0, Blocks.titaniumConveyor));
+
+            assertFalse(Build.validPlace(Blocks.titaniumConveyor, Team.sharded, 11, 8, 0));
+            Blocks.titaniumConveyor.handlePlacementLine(belt);
+
+            assertFalse(belt.contains(plan -> plan.x == 11 && plan.y == 8));
+            assertEquals(new Point2(3, 0), belt.first().config);
+            assertEquals(Point2.pack(11, 11), ((ItemBridgeBuild)world.tile(11, 8).build).link);
+        }finally{
+            player = previous;
         }
     }
 
@@ -1001,4 +1077,231 @@ public class ApplicationTests{
         tile.build.handleStack(item, 1, unit);
         assertEquals(capacity, tile.build.items.get(item));
     }
+
+    //region core item networks (#12776): items must never be duplicated or lost when storage or cores join or leave a network
+
+    void createCoreMap(){
+        world.resize(40, 40);
+        world.beginMapLoad();
+        world.tiles.fill();
+        world.endMapLoad();
+        state.set(State.playing);
+    }
+
+    CoreBuild placeCore(int x, int y, Team team){
+        world.tile(x, y).setBlock(Blocks.coreShard, team);
+        return (CoreBuild)world.tile(x, y).build;
+    }
+
+    Building placeVault(int x, int y, Team team){
+        world.tile(x, y).setBlock(Blocks.vault, team);
+        return world.tile(x, y).build;
+    }
+
+    /** @return the amount of an item across all distinct item modules of a team's cores and storage. */
+    int itemTotal(Team team, Item item){
+        Seq<ItemModule> seen = new Seq<>();
+        int total = 0;
+        for(Tile tile : world.tiles){
+            Building build = tile.build;
+            if(build != null && tile.isCenter() && build.team == team && build.items != null && (build.block instanceof StorageBlock) && !seen.contains(build.items, true)){
+                seen.add(build.items);
+                total += build.items.get(item);
+            }
+        }
+        return total;
+    }
+
+    @Test
+    void coreRemovedSingleSplitsIntoStorage(){
+        createCoreMap();
+        CoreBuild core = placeCore(10, 10, Team.sharded);
+        Building left = placeVault(7, 10, Team.sharded), right = placeVault(13, 10, Team.sharded);
+        core.items.add(Items.copper, 1000);
+
+        world.tile(10, 10).remove();
+
+        assertNull(((StorageBuild)left).linkedCore);
+        assertNotSame(left.items, right.items);
+        assertEquals(500, left.items.get(Items.copper));
+        assertEquals(500, right.items.get(Items.copper));
+    }
+
+    @Test
+    void coreRemovedWithOtherCoreNoDupe(){
+        createCoreMap();
+        CoreBuild core = placeCore(10, 10, Team.sharded), other = placeCore(30, 30, Team.sharded);
+        Building left = placeVault(7, 10, Team.sharded), right = placeVault(13, 10, Team.sharded);
+        core.items.add(Items.copper, 1000);
+        assertSame(core.items, other.items);
+
+        world.tile(10, 10).remove();
+
+        assertNotSame(other.items, left.items);
+        assertNotSame(other.items, right.items);
+        assertTrue(left.items.get(Items.copper) > 0);
+        assertEquals(1000, itemTotal(Team.sharded, Items.copper));
+    }
+
+    @Test
+    void coreRemovedStorageRelinkedToOtherCore(){
+        createCoreMap();
+        CoreBuild a = placeCore(10, 10, Team.sharded), b = placeCore(16, 10, Team.sharded);
+        StorageBuild vault = (StorageBuild)placeVault(13, 10, Team.sharded);
+        a.items.add(Items.copper, 1000);
+
+        Building linked = vault.linkedCore;
+        assertNotNull(linked);
+        CoreBuild remaining = linked == a ? b : a;
+
+        linked.tile.remove();
+
+        assertSame(remaining, vault.linkedCore);
+        assertSame(remaining.items, vault.items);
+        assertEquals(1000, itemTotal(Team.sharded, Items.copper));
+    }
+
+    @Test
+    void coreRebuiltNextToDetachedStorage(){
+        createCoreMap();
+        placeCore(10, 10, Team.sharded).items.add(Items.copper, 1000);
+        Building vault = placeVault(13, 10, Team.sharded);
+
+        world.tile(10, 10).remove();
+        assertEquals(1000, vault.items.get(Items.copper));
+
+        CoreBuild rebuilt = placeCore(10, 10, Team.sharded);
+        assertSame(rebuilt.items, vault.items);
+        assertEquals(1000, itemTotal(Team.sharded, Items.copper));
+    }
+
+    @Test
+    void coreRebuiltNextToDetachedStorageWithOtherCore(){
+        createCoreMap();
+        CoreBuild core = placeCore(10, 10, Team.sharded);
+        placeCore(30, 30, Team.sharded);
+        placeVault(13, 10, Team.sharded);
+        core.items.add(Items.copper, 3000);
+
+        world.tile(10, 10).remove();
+        assertEquals(3000, itemTotal(Team.sharded, Items.copper));
+
+        placeCore(10, 10, Team.sharded);
+        assertEquals(3000, itemTotal(Team.sharded, Items.copper));
+    }
+
+    @Test
+    void storageWithItemsJoiningNetwork(){
+        createCoreMap();
+        Building vault = placeVault(13, 10, Team.sharded);
+        vault.items.add(Items.copper, 300);
+        CoreBuild core = placeCore(10, 10, Team.sharded);
+        core.items.add(Items.lead, 100);
+
+        //placing storage does not change items already in the network
+        placeVault(7, 10, Team.sharded);
+
+        assertSame(core.items, vault.items);
+        assertEquals(300, itemTotal(Team.sharded, Items.copper));
+        assertEquals(100, itemTotal(Team.sharded, Items.lead));
+    }
+
+    @Test
+    void coreChangeTeamSingleNoDupe(){
+        createCoreMap();
+        CoreBuild core = placeCore(10, 10, Team.sharded);
+        StorageBuild vault = (StorageBuild)placeVault(13, 10, Team.sharded);
+        core.items.add(Items.copper, 1000);
+
+        core.changeTeam(Team.crux);
+
+        assertNull(vault.linkedCore);
+        assertNotSame(core.items, vault.items);
+        assertEquals(1000, itemTotal(Team.sharded, Items.copper) + itemTotal(Team.crux, Items.copper));
+    }
+
+    @Test
+    void coreChangeTeamSharedDetachesItems(){
+        createCoreMap();
+        CoreBuild core = placeCore(10, 10, Team.sharded), other = placeCore(30, 30, Team.sharded);
+        placeVault(13, 10, Team.sharded);
+        core.items.add(Items.copper, 2000);
+
+        core.changeTeam(Team.crux);
+
+        assertNotSame(core.items, other.items);
+        assertEquals(2000, itemTotal(Team.sharded, Items.copper) + itemTotal(Team.crux, Items.copper));
+
+        //the captured core must not be able to use the old team's items
+        int before = other.items.get(Items.copper);
+        core.items.remove(Items.copper, core.items.get(Items.copper));
+        assertEquals(before, other.items.get(Items.copper));
+    }
+
+    @Test
+    void coreChangeTeamJoinsExistingNetwork(){
+        createCoreMap();
+        CoreBuild core = placeCore(10, 10, Team.sharded), enemy = placeCore(30, 30, Team.crux);
+        core.items.add(Items.copper, 1000);
+        enemy.items.add(Items.copper, 500);
+
+        core.changeTeam(Team.crux);
+
+        assertSame(enemy.items, core.items);
+        assertEquals(0, itemTotal(Team.sharded, Items.copper));
+        assertEquals(1500, itemTotal(Team.crux, Items.copper));
+    }
+
+    @Test
+    void coreSetTeamsNoDupe(){
+        createCoreMap();
+        CoreBuild core = placeCore(10, 10, Team.sharded), other = placeCore(30, 30, Team.sharded);
+        placeVault(13, 10, Team.sharded);
+        core.items.add(Items.copper, 2000);
+
+        Tile.setTeams(new int[]{core.tile.pos()}, Team.crux);
+
+        assertEquals(Team.crux, core.team);
+        assertNotSame(core.items, other.items);
+        assertEquals(2000, itemTotal(Team.sharded, Items.copper) + itemTotal(Team.crux, Items.copper));
+    }
+
+    @Test
+    void coreUpgradeWithStorage(){
+        createCoreMap();
+        state.rules.infiniteResources = true;
+        CoreBuild core = placeCore(10, 10, Team.sharded);
+        Building vault = placeVault(7, 10, Team.sharded);
+        core.items.add(Items.copper, 1000);
+
+        Tile tile = world.tile(10, 10);
+        Blocks.coreFoundation.beforePlaceBegan(tile, Blocks.coreShard);
+        Blocks.coreFoundation.placeBegan(tile, Blocks.coreShard, null);
+
+        assertEquals(Blocks.coreFoundation, tile.block());
+        assertSame(tile.build.items, vault.items);
+        assertEquals(1000, itemTotal(Team.sharded, Items.copper));
+    }
+
+    @Test
+    void coreStorageSaveLoadNoDupe(){
+        world.loadMap(testMap);
+        state.set(State.playing);
+        CoreBuild core = state.teams.playerCores().first();
+        core.items.clear();
+        core.items.add(Items.copper, 1000);
+        placeVault(core.tile.x + 3, core.tile.y, core.team);
+        placeVault(core.tile.x - 3, core.tile.y, core.team);
+        assertEquals(1000, itemTotal(core.team, Items.copper));
+
+        SaveIO.save(saveDirectory.child("cores.msav"));
+        resetWorld();
+        SaveIO.load(saveDirectory.child("cores.msav"));
+
+        CoreBuild loaded = state.teams.playerCores().first();
+        assertSame(loaded.items, world.build(loaded.tile.x + 3, loaded.tile.y).items);
+        assertEquals(1000, itemTotal(loaded.team, Items.copper));
+    }
+
+    //endregion
 }

@@ -25,7 +25,7 @@ import static mindustry.Vars.*;
  * and the ordinary corner map comes back.
  */
 public class Mi2Map extends Table{
-    private static final float baseSize = 16f;
+    private static final float baseSize = 16f, minZoom = 0.25f;
     private float zoom = 4f;
     private float mapSize = 220f;
     private boolean placed;
@@ -37,7 +37,7 @@ public class Mi2Map extends Table{
         touchable = Touchable.enabled;
         margin(4f);
         mapSize = Mathf.clamp(Core.settings.getFloat("mi2map-size", 220f), 140f, 520f);
-        zoom = Mathf.clamp(Core.settings.getFloat("mi2map-zoom", 4f), 1f, 12f);
+        zoom = Math.max(0.01f, Core.settings.getFloat("mi2map-zoom", 4f));
 
         table(head -> {
             head.touchable = Touchable.enabled;
@@ -67,6 +67,8 @@ public class Mi2Map extends Table{
                 .tooltip("@client.mi2map.spawns");
             head.button(Icon.upOpen, Styles.cleari, () -> setMapSize(mapSize + 40f)).size(26f).tooltip("@client.mi2map.bigger");
             head.button(Icon.downOpen, Styles.cleari, () -> setMapSize(mapSize - 40f)).size(26f).tooltip("@client.mi2map.smaller");
+            head.button("−", Styles.flatt, () -> zoomBy(1f)).size(26f).tooltip("@client.mi2map.zoomout");
+            head.button("+", Styles.flatt, () -> zoomBy(-1f)).size(26f).tooltip("@client.mi2map.zoomin");
             head.button(Icon.map, Styles.cleari, () -> ui.minimapfrag.toggle()).size(26f).tooltip("@client.mi2map.full");
             head.button(Icon.cancel, Styles.cleari, () -> Core.settings.put("mi2map", false)).size(26f);
         }).growX().row();
@@ -77,8 +79,8 @@ public class Mi2Map extends Table{
                 if(player == null || renderer.minimap.getTexture() == null || world.width() <= 0) return;
                 if(!clipBegin()) return;
                 float prev = renderer.minimap.getZoom();
-                renderer.minimap.setZoom(zoom);
-                setView();
+                renderer.minimap.setZoom(zoom, minZoom);
+                setView(renderer.minimap.getZoom());
                 Draw.color();
                 Draw.rect(renderer.minimap.getRegion(), x + width / 2f, y + height / 2f, width, height);
                 renderer.minimap.drawEntities(x, y, width, height, false);
@@ -87,6 +89,7 @@ public class Mi2Map extends Table{
                 clipEnd();
             }
         };
+        canvas.touchable = Touchable.enabled;
         add(canvas).size(mapSize).padTop(2f);
 
         canvas.addListener(new InputListener(){
@@ -101,8 +104,7 @@ public class Mi2Map extends Table{
             }
             @Override
             public boolean scrolled(InputEvent event, float x, float y, float amountX, float amountY){
-                zoom = Mathf.clamp(zoom + amountY * Math.max(0.15f, zoom * 0.12f), 1f, maxZoom());
-                Core.settings.put("mi2map-zoom", zoom);
+                zoomBy(amountY);
                 return true;
             }
         });
@@ -120,7 +122,8 @@ public class Mi2Map extends Table{
             }
             clamp();
             Element hover = Core.scene.getHoverElement();
-            if(hover != null && hover.isDescendantOf(this)) requestScroll();
+            if(hover == canvas) canvas.requestScroll();
+            else if(canvas.hasScroll()) Core.scene.setScrollFocus(null);
         });
     }
 
@@ -136,20 +139,26 @@ public class Mi2Map extends Table{
         pack();
     }
 
-    private float maxZoom(){
-        if(world.width() <= 0) return 8f;
-        return Math.max(1f, Math.min(world.width(), world.height()) / baseSize / 2f);
+    private void zoomBy(float steps){
+        float current = Math.min(zoom, maxZoom());
+        zoom = Mathf.clamp(current + steps * Math.max(0.15f, current * 0.12f), Math.min(minZoom, maxZoom()), maxZoom());
+        Core.settings.put("mi2map-zoom", zoom);
     }
 
-    private void setView(){
-        float sz = baseSize * zoom;
+    private float maxZoom(){
+        if(world.width() <= 0) return 8f;
+        return Math.min(world.width(), world.height()) / baseSize / 2f;
+    }
+
+    private void setView(float mapZoom){
+        float sz = baseSize * mapZoom;
         float dx = Mathf.clamp(Core.camera.position.x / tilesize, sz, Math.max(sz, world.width() - sz));
         float dy = Mathf.clamp(Core.camera.position.y / tilesize, sz, Math.max(sz, world.height() - sz));
         view.set((dx - sz) * tilesize, (dy - sz) * tilesize, sz * 2f * tilesize, sz * 2f * tilesize);
     }
 
     private void pan(float x, float y){
-        if(view.width < 1f) setView();
+        setView(Math.min(zoom, maxZoom()));
         float wx = view.x + (x / Math.max(canvas.getWidth(), 1f)) * view.width;
         float wy = view.y + (y / Math.max(canvas.getHeight(), 1f)) * view.height;
         control.input.panCamera(Tmp.v1.set(wx, wy).clamp(-tilesize / 2f, -tilesize / 2f, world.unitWidth() + tilesize / 2f, world.unitHeight() + tilesize / 2f));

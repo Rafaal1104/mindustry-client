@@ -29,7 +29,9 @@ object Packets {
         RegisteredTransmission(ImageTransmission::class, ::ImageTransmission),
         RegisteredTransmission(SyncerTransmission::class, ::SyncerTransmission),
         RegisteredTransmission(SchematicTransmission::class, ::SchematicTransmission),
-        RegisteredTransmission(FocusMarkTransmission::class, ::FocusMarkTransmission)  // Keep last: the index is the wire id
+        RegisteredTransmission(FocusMarkTransmission::class, ::FocusMarkTransmission),
+        RegisteredTransmission(PingTransmission::class, ::PingTransmission),
+        RegisteredTransmission(GriefMarkTransmission::class, ::GriefMarkTransmission)  // Append new types here only: the index is the wire id
     )
 
     private data class RegisteredTransmission<T : Transmission>(val type: KClass<T>, val constructor: (content: ByteArray, id: Long, senderID: Int) -> T)

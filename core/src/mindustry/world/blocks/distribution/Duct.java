@@ -121,6 +121,11 @@ public class Duct extends Block implements Autotiler{
     }
 
     @Override
+    public boolean canReplace(Block other){
+        return super.canReplace(other) && !(other instanceof ItemBridge) && !(other instanceof DirectionBridge);
+    }
+
+    @Override
     public void handlePlacementLine(Seq<BuildPlan> plans){
         if(bridgeReplacement == null) return;
         boolean hasJunction = junctionReplacement != null && junctionReplacement.unlockedNow() && !junctionReplacement.isHidden();

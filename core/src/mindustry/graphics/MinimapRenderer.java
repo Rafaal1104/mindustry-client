@@ -104,7 +104,12 @@ public class MinimapRenderer{
     }
 
     public void setZoom(float amount){
-        zoom = Mathf.clamp(amount, 1f, Math.min(world.width(), world.height()) / baseSize / 2f);
+        setZoom(amount, 1f);
+    }
+
+    public void setZoom(float amount, float minimum){
+        float max = Math.min(world.width(), world.height()) / baseSize / 2f;
+        zoom = Mathf.clamp(amount, Math.min(minimum, max), max);
     }
 
     public float getZoom(){
@@ -324,7 +329,7 @@ public class MinimapRenderer{
     public @Nullable TextureRegion getRegion(){
         if(texture == null) return null;
 
-        float sz = Mathf.clamp(baseSize * zoom, baseSize, Math.min(world.width(), world.height()));
+        float sz = Math.min(baseSize * zoom, Math.min(world.width(), world.height()) / 2f);
         float dx = (Core.camera.position.x / tilesize);
         float dy = (Core.camera.position.y / tilesize);
         dx = Mathf.clamp(dx, sz, world.width() - sz);

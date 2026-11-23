@@ -964,6 +964,7 @@ public class DesktopInput extends InputHandler{
         if(Core.input.keyTap(Binding.clearFrozenPlans)){
             frozenPlans.clear();
         }else if(Core.input.keyTap(Binding.clearBuilding)){
+            mindustry.client.fallen.CustomBuildLogic.cancelPending();
             if(!player.dead() && player.unit().plans.isEmpty()){
                 lastSchematic = null;
                 selectPlans.clear();
@@ -1427,13 +1428,13 @@ public class DesktopInput extends InputHandler{
 
             unit.aim(input.mouseWorldX(), input.mouseWorldY(), true);
 
-            if(!ignoreKeys){
-                if(settings.getBool("unitboosthold", true)){
-                    // If auto-boost, invert the behavior of the boost key
-                    player.boosting = unit.type.canBoost && Core.settings.getBool("autoboost") ^ input.keyDown(Binding.boost);
-                }else if(input.keyTap(Binding.boost)){
-                    player.boosting = unit.type.canBoost && !player.boosting;
-                }
+            boolean autoBoost = settings.getBool("autoboost", false);
+            if(!unit.type.canBoost){
+                player.boosting = false;
+            }else if(settings.getBool("unitboosthold", true)){
+                player.boosting = autoBoost ^ (!ignoreKeys && input.keyDown(Binding.boost));
+            }else if(!ignoreKeys && input.keyTap(Binding.boost)){
+                player.boosting = !player.boosting;
             }
 
             if(Core.settings.getBool("autotarget", false)) mindustry.client.fallen.FDAutoShoot.update();

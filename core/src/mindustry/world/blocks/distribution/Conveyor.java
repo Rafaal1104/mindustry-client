@@ -85,10 +85,10 @@ public class Conveyor extends Block implements Autotiler{
             && lookingAtEither(tile, rotation, otherx, othery, otherrot, otherblock);
     }
 
-    // Plastanium belts and payload blocks stay. Item, phase and direction bridges are replaced.
     @Override
     public boolean canReplace(Block other){
-        return super.canReplace(other) && !(other instanceof StackConveyor) && !(other instanceof PayloadBlock);
+        return super.canReplace(other) && !(other instanceof StackConveyor) && !(other instanceof PayloadBlock)
+            && !(other instanceof ItemBridge) && !(other instanceof DirectionBridge);
     }
 
     @Override

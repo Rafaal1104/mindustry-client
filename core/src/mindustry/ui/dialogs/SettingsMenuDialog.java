@@ -477,7 +477,7 @@ public class SettingsMenuDialog extends BaseDialog{
         client.sliderPref("minzoom", 0, 0, 100, s -> Strings.fixed(Mathf.pow(10, 0.0217f * s) / 100f, 2) + "x");
         client.sliderPref("weatheropacity", 50, 0, 100, s -> s + "%");
         client.sliderPref("beamdrillopacity", 100, 0, 100, 1, s -> s + "%");
-        client.sliderPref("junctionview", 0, -1, 1, 1, s -> { Junction.setBaseOffset(s); return s == -1 ? "@client.left" : s == 1 ? "@client.right" : "Do not show"; });
+        client.sliderPref("junctionview", 0, -1, 1, 1, s -> { Junction.setBaseOffset(s); return s == -1 ? "@client.left" : s == 1 ? "@client.right" : "@client.setting.junctionview.center"; });
         client.sliderPref("spawntime", 5, -1, 60, s -> { ClientVars.spawnTime = 60 * s; if (Vars.pathfinder.thread == null) Vars.pathfinder.start(); return s == -1 ? "Solid Line" : s == 0 ? "@off" : String.valueOf(s); });
         client.sliderPref("traveltime", 10, 0, 60, s -> { ClientVars.travelTime = 60f / s; return s == 0 ? "@off" : String.valueOf(s); });
         client.sliderPref("formationopacity", 30, 10, 100, 5, s -> { UnitType.formationAlpha = s / 100f; return s + "%"; });
@@ -715,6 +715,8 @@ public class SettingsMenuDialog extends BaseDialog{
         game.checkPref("savecreate", true);
 //        game.checkPref("blockreplace", true); We have this as a client setting in foo's
         game.checkPref("conveyorpathfinding", true);
+        game.checkPref("vanillaplacementpath", false);
+        if(!mobile) game.checkPref("fooplacementalt", false);
         game.checkPref("hints", true);
 
         if(!mobile){

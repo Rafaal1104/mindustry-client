@@ -93,7 +93,13 @@ public final class TransportScan{
 
     private static void collectOutputs(Building build, Building prev){
         Block block = build.block;
-        if(block instanceof Conveyor || block instanceof Duct || block instanceof StackConveyor || block instanceof Conduit){
+        if(build instanceof StackConveyor.StackConveyorBuild stack){
+            for(Building other : build.proximity){
+                if(stack.outputsTo(other)) add(other);
+            }
+            return;
+        }
+        if(block instanceof Conveyor || block instanceof Duct || block instanceof Conduit){
             add(build.front());
             return;
         }

@@ -44,6 +44,7 @@ import mindustry.game.EventType.*;
 import mindustry.game.*;
 import mindustry.gen.*;
 import mindustry.graphics.*;
+import mindustry.input.InputHandler;
 import mindustry.maps.Map;
 import mindustry.type.*;
 import mindustry.ui.*;
@@ -86,7 +87,7 @@ public class PanelFragment extends Table{
     private boolean eneblemining = false;
     /** When true, keep trying to start mining after join until unit+core are ready. */
     private boolean pendingAutoMine = false;
-    private boolean viewunitshealth = false;
+    private int efficiencyWindow;
     private boolean viewunitseffects = false;
     private boolean viewprogressunit = false;
     private boolean viewprogresbuild  = false;
@@ -147,11 +148,12 @@ public class PanelFragment extends Table{
                 CustomBuildLogic.update();
                 HiddenItems.refresh();
                 OreAdsorb.update();
-                DuctMarks.refresh();
                 ProcessorUse.update();
                 WavePath.update();
                 WaveHealth.update();
                 CoreChart.update();
+                if(viewEfficiency && !state.isPaused()) sampleEfficiency();
+                if(mobile && FDAutoShoot.enabled()) FDAutoShoot.update();
                 if(autoFixPower && state.isGame() && fixPowerTimer.get(60f * 60f)) fixPowerQuiet();
             }
         });
@@ -162,9 +164,9 @@ public class PanelFragment extends Table{
                 drawUnits();
                 FDAutoShoot.drawTarget();
                 FDAutoShoot.drawUnitAim();
-                FDAutoShoot.update();
                 DamageNumbers.draw();
                 TransportScan.draw();
+                DuctMarks.draw();
                 OverdrivePreview.draw();
                 ProjectorRanges.draw();
                 ProcessorUse.draw();
@@ -274,6 +276,8 @@ public class PanelFragment extends Table{
         SquadCommander.init();
         AreaUpgrade.init();
         FocusMarks.init();
+        mindustry.client.fallen.MapPings.init();
+        mindustry.client.fallen.GriefReports.init();
         MapSearchDialog.init();
         AntiAttemPatcher.load();
         Log.info("Start init");
@@ -949,13 +953,16 @@ public class PanelFragment extends Table{
         tile(labels, col, new TextureRegionDrawable(Blocks.illuminator.uiIcon), bundle.get("client.morj.btn.light"), "@client.fdpanel.light",
             () -> enableLight, () -> enableLight = !enableLight, null);
         tile(labels, col, Icon.add, bundle.get("client.morj.btn.hp"), "@client.fdpanel.unitshealth",
-            () -> viewunitshealth, () -> viewunitshealth = !viewunitshealth, null);
+            () -> settings.getBool("unithealthview", false), () -> settings.put("unithealthview", !settings.getBool("unithealthview", false)), this::healthBarSettings, "client.fdpanel.unitshealth.always");
         tile(labels, col, new TextureRegionDrawable(Blocks.groundFactory.uiIcon), bundle.get("client.morj.btn.uprogress"), "@client.fdpanel.unitprogress",
             () -> viewprogressunit, () -> viewprogressunit = !viewprogressunit, null);
         tile(labels, col, Icon.crafting, bundle.get("client.morj.btn.bprogress"), "@client.fdpanel.buildprogress",
             () -> viewprogresbuild, () -> viewprogresbuild = !viewprogresbuild, null);
         tile(labels, col, Icon.chartBar, bundle.get("client.morj.btn.eff"), "@client.fdpanel.efficiency",
-            () -> viewEfficiency, () -> viewEfficiency = !viewEfficiency, null);
+            () -> viewEfficiency, () -> {
+                viewEfficiency = !viewEfficiency;
+                effStorage.clear();
+            }, this::efficiencySettings, "client.fdpanel.efficiency.settings");
         tile(labels, col, Icon.effect, bundle.get("client.morj.btn.status"), "@client.fdpanel.uniteffects",
             () -> viewunitseffects, () -> viewunitseffects = !viewunitseffects, null);
         tile(labels, col, new TextureRegionDrawable(Blocks.coreShard.uiIcon), bundle.get("client.morj.btn.core"), "@client.fdpanel.coreitems",
@@ -2144,52 +2151,56 @@ public class PanelFragment extends Table{
         });
     }
 
+
     private static class EffState {
-        float prevValue = 0;
-        float currentValue = 0;
-        float startTime = 0;
-        float lastUpdate = 0;
+        float value;
+        float lastTick;
     }
 
-    private float getSmoothEfficiency(Building build) {
-        float timerSeconds = 10f; // Уменьшим окно до 10 сек для отзывчивости
-        float windowTicks = timerSeconds * 60f;
+    private static boolean measuresEfficiency(Building build){
+        return build.block.category == Category.production || build.block.category == Category.crafting ||
+            build.block.category == Category.units || build instanceof mindustry.world.blocks.distribution.MassDriver.MassDriverBuild ||
+            build instanceof mindustry.world.blocks.production.Pump.PumpBuild || build instanceof mindustry.world.blocks.defense.OverdriveProjector.OverdriveBuild ||
+            build instanceof mindustry.world.blocks.power.PowerGenerator.GeneratorBuild;
+    }
+
+    private void sampleEfficiency(){
+        int window = settings.getInt("efficiencyseconds", 10);
+        if(window != efficiencyWindow){
+            efficiencyWindow = window;
+            effStorage.clear();
+        }
         float now = Time.time;
-
-        EffState state = effStorage.get(build.id);
-
-        if (state == null) {
-            state = new EffState();
-            state.startTime = now;
-            state.lastUpdate = now;
-            effStorage.put(build.id, state);
-            return 0;
+        for(Building build : Groups.build){
+            if(!measuresEfficiency(build) || !build.within(Core.camera.position, Core.camera.width + Core.camera.height)) continue;
+            EffState sample = effStorage.get(build.id, EffState::new);
+            float value = Mathf.clamp(build.efficiency);
+            float elapsed = now - sample.lastTick;
+            if(sample.lastTick <= 0f || elapsed > 60f) sample.value = value;
+            else sample.value = Mathf.lerp(sample.value, value, 1f - (float)Math.exp(-elapsed / (60f * Math.max(1, window))));
+            sample.lastTick = now;
         }
-
-        float passedTime = now - state.lastUpdate;
-        float elapsedSinceStart = now - state.startTime;
-
-        if (elapsedSinceStart > windowTicks) {
-            state.prevValue = state.currentValue / windowTicks;
-            state.currentValue = 0;
-            state.startTime = now;
-        }
-
-        // ГЛАВНОЕ ИЗМЕНЕНИЕ: эффективность умножаем на скорость времени (Overdrive)
-        // Для ускорителей берем просто их рабочее состояние
-        float points = build.efficiency * build.timeScale();
-
-        // Если это сам ускоритель, его timeScale всегда 1, но нам важно, работает ли он
-        if(build instanceof mindustry.world.blocks.defense.OverdriveProjector.OverdriveBuild) {
-            points = build.efficiency;
-        }
-
-        state.currentValue += passedTime * points;
-        state.lastUpdate = now;
-
-        float measurement = Math.min(1f, elapsedSinceStart / windowTicks);
-        return (state.currentValue / windowTicks) + (state.prevValue * (1f - measurement));
     }
+
+    private void healthBarSettings(){
+        BaseDialog dialog = new BaseDialog("@client.fdpanel.unitshealth");
+        dialog.cont.check("@client.fdpanel.unitshealth.always", settings.getBool("unithealthalways", false),
+            value -> settings.put("unithealthalways", value)).left();
+        dialog.addCloseButton();
+        dialog.show();
+    }
+
+    private void efficiencySettings(){
+        BaseDialog dialog = new BaseDialog("@client.fdpanel.efficiency");
+        Slider slider = new Slider(1f, 60f, 1f, false);
+        slider.setValue(settings.getInt("efficiencyseconds", 10));
+        slider.changed(() -> settings.put("efficiencyseconds", (int)slider.getValue()));
+        dialog.cont.label(() -> bundle.format("client.fdpanel.efficiency.window", (int)slider.getValue())).row();
+        dialog.cont.add(slider).width(260f).pad(10f);
+        dialog.addCloseButton();
+        dialog.show();
+    }
+
     public static void initTypes() {
         // Используем select вместо filter
         sortedUnitTypes = Vars.content.units().copy()
@@ -2428,38 +2439,19 @@ public class PanelFragment extends Table{
                 }
             }
 
-            if (viewEfficiency) {
-                boolean isProducer = bui.block.category == Category.production ||
-                        bui.block.category == Category.crafting ||
-                        bui.block.category == Category.units ||
-                        bui instanceof mindustry.world.blocks.distribution.MassDriver.MassDriverBuild  ||
-                        bui instanceof mindustry.world.blocks.production.Pump.PumpBuild  ||
-                        bui instanceof mindustry.world.blocks.defense.OverdriveProjector.OverdriveBuild  ||
-                        bui instanceof mindustry.world.blocks.power.PowerGenerator.GeneratorBuild;
 
-                if (isProducer) {
-                    float smoothEff = getSmoothEfficiency(bui);
+            EffState efficiency = viewEfficiency ? effStorage.get(bui.id) : null;
+            if(efficiency != null && !bui.inFogTo(player.team())){
+                float fraction = efficiency.value;
+                if(fraction < 0.5f) tmpCol.set(Color.red).lerp(Color.orange, fraction * 2f);
+                else tmpCol.set(Color.orange).lerp(Color.green, (fraction - 0.5f) * 2f);
 
-                    if (smoothEff >= 0f) {
-                        // Расчет цвета:
-                        if (smoothEff < 0.5f) tmpCol.set(Color.red).lerp(Color.orange, smoothEff * 2f);
-                        else if (smoothEff <= 1.02f) tmpCol.set(Color.orange).lerp(Color.green, (smoothEff - 0.5f) * 2f);
-                        else tmpCol.set(Color.green).lerp(Color.cyan, Math.min(1f, (smoothEff - 1f) / 1.5f)); // Голубой для > 100%
-
-                        Draw.z(Layer.darkness + 1);
-                        sb.setLength(0);
-
-                        // Если эффективность > 100%, подсвечиваем это
-                        int val = Math.round(smoothEff * 100);
-                        sb.append(val).append("%");
-
-                        layout.setText(font, sb);
-                        font.setColor(tmpCol);
-
-                        // Отрисовка в центре блока
-                        font.draw(sb, bui.x - layout.width / 2, bui.y + layout.height / 2);
-                    }
-                }
+                Draw.z(Layer.darkness + 1f);
+                sb.setLength(0);
+                sb.append(Math.round(fraction * 100f)).append('%');
+                layout.setText(font, sb);
+                font.setColor(tmpCol);
+                font.draw(sb, bui.x - layout.width / 2f, bui.y + layout.height / 2f);
             }
         }
 
@@ -2468,6 +2460,7 @@ public class PanelFragment extends Table{
     }
 
     private void drawUnits() {
+        boolean viewunitshealth = settings.getBool("unithealthview", false);
         if (!viewunitshealth && !viewunitseffects) return;
 
         brokenFade = Mathf.lerpDelta(brokenFade, 1f, 0.1f);
@@ -2478,18 +2471,22 @@ public class PanelFragment extends Table{
         font.setUseIntegerPositions(false);
         font.getData().setScale(fontScale);
 
+        boolean alwaysShowHealth = settings.getBool("unithealthalways", false);
+        Draw.z(Layer.overlayUI + 1f);
         for(Unit unit : Groups.unit) {
-            if(!unit.isAdded() || !unit.within(Core.camera.position, Core.graphics.getWidth() / 1.5f)) continue;
+            if(!unit.isAdded() || !unit.within(Core.camera.position, Core.graphics.getWidth() / 1.5f) || unit.inFogTo(player.team())) continue;
+            if(InputHandler.commandHides(unit) && !control.input.selectedUnits.contains(unit, true)) continue;
 
-            if (viewunitshealth && unit.health < unit.maxHealth) {
+            if (viewunitshealth && (alwaysShowHealth || unit.damaged())) {
                 float prog = unit.health / unit.maxHealth;
                 if (prog > 0.0001f) {
                     tmpCol.set(Color.white).lerp(Color.black, 1f - prog);
 
-                    drawBarAndText(unit.x, unit.y - (unit.hitSize * 3) + (unit.hitSize + 2), unit.hitSize, unit.team.color, prog, false, font);
+                    drawBarAndText(unit.x, unit.y + unit.hitSize / 2f + 3f, Math.max(5f, unit.hitSize / 2f), unit.team.color, prog, false, font);
                 }
             }
             if (viewunitseffects) {
+                Draw.z(Layer.overlayUI);
                 Draw.alpha(0.90f * brokenFade);
                 tempBits.clear();
                 Bits applied = unit.statusBits();
@@ -2511,9 +2508,9 @@ public class PanelFragment extends Table{
     }
 
     private void drawBarAndText(float x, float y, float width, Color teamColor, float prog, boolean isFactory, Font font) {
-        float yOffset = isFactory ? width + 2 : width + 2; // В оригинале было (hw + 2)
+        float yOffset = isFactory ? width + 2f : 0f;
 
-        Draw.z(Layer.darkness + 1);
+        Draw.z(isFactory ? Layer.darkness + 1f : Layer.overlayUI + 1f);
 
         if(isFactory){
             Draw.color(Pal.darkerGray);

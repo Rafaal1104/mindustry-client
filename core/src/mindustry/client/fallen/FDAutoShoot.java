@@ -152,6 +152,17 @@ public class FDAutoShoot {
             finalTarget = (Position) manualTarget;
         }
 
+        if(finalTarget == null && Core.settings.getBool("focusmark-squad", true)){
+            Teamc marked = FocusMarks.ownTarget();
+            if(marked instanceof Unit unit && !buildingsOnly && !Core.settings.getBool("ignoreunit", false)
+                && enemyUnit(playerUnit, unit) && playerUnit.within(unit, unitSearch)){
+                finalTarget = unit;
+            }else if(marked instanceof Building building && !ignoreBuildings && playerUnit.type.targetGround
+                && validateEntity(building) && playerUnit.within(building, range)){
+                finalTarget = building;
+            }
+        }
+
         // Приоритет №2: Вражеские юниты. Постоянный огонь ищет дальше радиуса оружия.
         if (finalTarget == null && !buildingsOnly && !Core.settings.getBool("ignoreunit", false)) {
             finalTarget = pickEnemy(playerUnit, unitSearch);
@@ -221,12 +232,12 @@ public class FDAutoShoot {
     }
 
     private static boolean enemyUnit(Unit self, Unit other){
-        return other != self && other.targetable(self.team) && other.checkTarget(self.type.targetAir, self.type.targetGround);
+        return other.team != self.team && other.isValid() && !other.inFogTo(self.team) && other.targetable(self.team) && other.checkTarget(self.type.targetAir, self.type.targetGround);
     }
 
     private static void handleManualTargetSelection() {
         if (Core.input.keyDown(KeyCode.space) && Core.input.keyTap(Binding.select)) {
-            Unit mouseUnit = Units.closestEnemy(null, player.mouseX, player.mouseY, 16f, u -> u.targetable(player.team()));
+            Unit mouseUnit = Units.closestEnemy(player.team(), player.mouseX, player.mouseY, 16f, u -> enemyUnit(player.unit(), u));
             if (mouseUnit != null) {
                 manualTarget = mouseUnit;
                 lastTargetPos = mouseUnit;
@@ -243,8 +254,8 @@ public class FDAutoShoot {
     }
 
     private static boolean validateEntity(Entityc e) {
-        if (e instanceof Unit u) return u.isAdded() && !u.dead;
-        if (e instanceof Building b) return b.isValid();
+        if (e instanceof Unit u) return enemyUnit(player.unit(), u);
+        if (e instanceof Building b) return b.isValid() && b.team != player.team() && !b.inFogTo(player.team());
         return false;
     }
 

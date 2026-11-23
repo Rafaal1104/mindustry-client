@@ -399,6 +399,7 @@ public class ActivityLogger {
                         "[lightgray]Сломано:[] " + breaks + " | [lightgray]Построено:[] " + builds;
 
                 Vars.player.sendMessage(alert);
+                GriefReports.autoReport(name, breaks, builds);
             }
         }
     }

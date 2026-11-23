@@ -10,6 +10,7 @@ import mindustry.content.*;
 import mindustry.entities.units.*;
 import mindustry.game.EventType.*;
 import mindustry.gen.*;
+import mindustry.input.Placement;
 import mindustry.world.*;
 import mindustry.world.blocks.*;
 import mindustry.world.blocks.distribution.*;
@@ -34,6 +35,7 @@ public class PlastaniumCrossings{
     private static final IntSet noAutoLink = new IntSet();
     /** Bridge plans generated for the line currently being drawn. */
     private static final Seq<BuildPlan> generated = new Seq<>();
+    private static final IntIntMap crossingLinks = new IntIntMap();
     private static final Seq<BuildPlan> result = new Seq<>();
     /** Ends of the phase bridges of the line being drawn, they need a power node. */
     private static final Seq<Tile> phaseEnds = new Seq<>();
@@ -68,6 +70,7 @@ public class PlastaniumCrossings{
     /** Called from {@link StackConveyor#handlePlacementLine}: adds bridge plans for every crossed line. */
     public static void handleLine(Seq<BuildPlan> plans){
         generated.clear();
+        crossingLinks.clear();
         nodeTargets.clear();
         if(!enabled() || plans.isEmpty()) return;
         result.clear();
@@ -88,7 +91,7 @@ public class PlastaniumCrossings{
     /** Tries to bridge the line crossed at this plan. Returns false if the tile is left to the vanilla behaviour. */
     private static boolean crossLine(Seq<BuildPlan> plans, BuildPlan plan){
         Tile tile = plan.tile();
-        if(tile == null || tile.build == null || tile.build.tile != tile) return false;
+        if(tile == null || tile.build == null || tile.build.tile != tile || tile.team() != player.team()) return false;
         Block family = bridgeFor(tile.block());
         if(family == null || !family.unlockedNow()) return false;
 
@@ -105,7 +108,7 @@ public class PlastaniumCrossings{
         Tile dst = skipConveyors(plans, tile, dir, maxRange);
         if(!partOfLine(src, family, dir) || !partOfLine(dst, family, dir)) return false;
         int distance = Math.abs(src.x - dst.x) + Math.abs(src.y - dst.y);
-        if(distance > maxRange) return false;
+        if(distance > maxRange || src.team() != player.team() || dst.team() != player.team()) return false;
         Block bridge = distance > range ? phase : family;
         // an end that already is a bridge (e.g. the input of a phase bridge next to the new line) is kept and chained to,
         // so the new bridge has to be of the same kind; the bigger one wins if both ends are bridges
@@ -124,12 +127,32 @@ public class PlastaniumCrossings{
         if(bridge instanceof ItemBridge chosen){
             Tile newSrc = followBack(src, chosen, removed);
             Tile newDst = followForward(dst, chosen, removed);
-            if(Math.abs(newSrc.x - newDst.x) + Math.abs(newSrc.y - newDst.y) > chosen.range || removed.contains(t -> onLine(plans, t))) return false;
+            if(!chosen.positionsValid(newSrc.x, newSrc.y, newDst.x, newDst.y) || removed.contains(t -> onLine(plans, t))) return false;
             src = newSrc;
             dst = newDst;
         }
 
-        // bridges first, so the crossed line never feeds into the new conveyor
+        if(!Placement.canHostBridge(bridge, src.x, src.y, dir) || !Placement.canHostBridge(bridge, dst.x, dst.y, dir)) return false;
+        boolean duplicate = crossingLinks.get(src.pos(), -1) == dst.pos();
+        if(crossingLinks.containsKey(src.pos()) && !duplicate) return false;
+        crossingLinks.put(src.pos(), dst.pos());
+
+        if(!duplicate){
+            addCrossingBridge(src, dst, bridge, dir, removed);
+        }
+
+        if(Build.validPlace(plan.block, player.team(), plan.x, plan.y, plan.rotation)){
+            result.add(plan);
+        }else{
+            BuildPlan breaking = new BuildPlan(plan.x, plan.y);
+            breaking.block = tile.block();
+            breaking.config = plan.copy();
+            result.add(breaking);
+        }
+        return true;
+    }
+
+    private static void addCrossingBridge(Tile src, Tile dst, Block bridge, int dir, Seq<Tile> removed){
         if(bridge instanceof ItemBridge){
             // both ends must be the same bridge: an existing one of that kind only gets relinked, anything else is replaced
             add(new BuildPlan(src.x, src.y, dir, bridge, new Point2(dst.x - src.x, dst.y - src.y)));
@@ -151,17 +174,6 @@ public class PlastaniumCrossings{
             result.add(breaking);
         }
 
-        if(Build.validPlace(plan.block, player.team(), plan.x, plan.y, plan.rotation)){
-            result.add(plan);
-        }else{
-            // conduits can't be replaced by a conveyor: break it, the conveyor is placed once the tile is free
-            // (the conveyor plan rides in the config and is only queued when the line is confirmed, see flushed())
-            BuildPlan breaking = new BuildPlan(plan.x, plan.y);
-            breaking.block = tile.block();
-            breaking.config = plan.copy();
-            result.add(breaking);
-        }
-        return true;
     }
 
     /** From the output of a bridge of another kind, walks back to the input feeding it. */

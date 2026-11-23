@@ -1282,12 +1282,13 @@ public abstract class InputHandler implements InputProcessor, GestureListener{
             if(selectedUnits.size > 0){
 
                 Teamc attack = null;
+                boolean forceMove = !Core.settings.getBool("fooplacementalt", false) && Core.input.keyDown(Binding.bridgeModifier);
 
-                if(!Core.input.modifierDown(Binding.commandNoTargetBuilding) && !Core.input.keyDown(Binding.bridgeModifier)){
+                if(!Core.input.modifierDown(Binding.commandNoTargetBuilding) && !forceMove){
                     attack = world.buildWorld(target.x, target.y);
                     if(attack != null && attack.team() == player.team()) attack = null;
                 }
-                if(attack == null && !Core.input.modifierDown(Binding.commandNoTargetUnit) && !Core.input.keyDown(Binding.bridgeModifier)){
+                if(attack == null && !Core.input.modifierDown(Binding.commandNoTargetUnit) && !forceMove){
                     attack = selectedEnemyUnit(target.x, target.y);
                 }
 
@@ -1301,10 +1302,10 @@ public abstract class InputHandler implements InputProcessor, GestureListener{
                 if(ids.length > maxChunkSize){
                     for(int i = 0; i < ids.length; i += maxChunkSize){
                         int[] data = Arrays.copyOfRange(ids, i, Math.min(i + maxChunkSize, ids.length));
-                        Call.commandUnits(player, data, attack instanceof Building b && !Core.input.keyDown(Binding.bridgeModifier) ? b : null, attack instanceof Unit u && !Core.input.keyDown(Binding.bridgeModifier) ? u : null, target, queue, i + maxChunkSize >= ids.length);
+                        Call.commandUnits(player, data, attack instanceof Building b ? b : null, attack instanceof Unit u ? u : null, target, queue, i + maxChunkSize >= ids.length);
                     }
                 }else{
-                    Call.commandUnits(player, ids, attack instanceof Building b && !Core.input.keyDown(Binding.bridgeModifier) ? b : null, attack instanceof Unit u && !Core.input.keyDown(Binding.bridgeModifier) ? u : null, target, queue, true);
+                    Call.commandUnits(player, ids, attack instanceof Building b ? b : null, attack instanceof Unit u ? u : null, target, queue, true);
                 }
             }
 
@@ -2346,8 +2347,8 @@ public abstract class InputHandler implements InputProcessor, GestureListener{
     protected void updateLine(int x1, int y1, int x2, int y2){
         linePlans.clear();
         Block old = block;
-        boolean bridgeMod = Core.input.keyDown(Binding.bridgeModifier);
-        boolean selectedBridge = isBridgePlacement(old);
+        boolean fooAlt = Core.settings.getBool("fooplacementalt", false);
+        boolean bridgeMod = !fooAlt && Core.input.keyDown(Binding.bridgeModifier);
 
         if(block != null && block.group == BlockGroup.walls && Core.input.shift()){
             updateWallLine(x1, y1, x2, y2);
@@ -2367,13 +2368,14 @@ public abstract class InputHandler implements InputProcessor, GestureListener{
             }
         }
 
-        if(selectedBridge && Core.input.shift() && !(x1 == x2 && y1 == y2)){
+        if(isBridgePlacement(block) && Core.input.shift() && !(block instanceof ItemBridge)
+            && !(x1 == x2 && y1 == y2)){
             buildPathfindBridgeLine(x1, y1, x2, y2);
             block = old;
             return;
         }
 
-        if(bridgeMod && selectedBridge && !(x1 == x2 && y1 == y2)){
+        if(bridgeMod && isBridgePlacement(block) && !Core.input.shift() && !(x1 == x2 && y1 == y2)){
             buildDiagonalBridgeLine(x1, y1, x2, y2);
             block = old;
             return;
@@ -2455,20 +2457,23 @@ public abstract class InputHandler implements InputProcessor, GestureListener{
             Point2 next = i + 1 < nodes.size ? nodes.get(i + 1) : null;
             int rot = rotation;
             if(next != null){
-                int r = Tile.relativeTo(p.x, p.y, next.x, next.y);
+                int r = Tile.relativeTo((float)p.x, p.y, next.x, next.y);
                 if(r != -1) rot = r;
             }else if(i > 0){
                 Point2 prev = nodes.get(i - 1);
-                int r = Tile.relativeTo(prev.x, prev.y, p.x, p.y);
+                int r = Tile.relativeTo((float)prev.x, prev.y, p.x, p.y);
                 if(r != -1) rot = r;
             }
             rotation = rot;
 
             // configs set explicitly so Shift weaving in handlePlacementLine does not skip hops
             Object config = null;
-            if(next != null && block instanceof ItemBridge ib
-                    && ib.positionsValid(p.x, p.y, next.x, next.y)){
-                config = new Point2(next.x - p.x, next.y - p.y);
+            if(block instanceof ItemBridge ib){
+                if(next != null && ib.positionsValid(p.x, p.y, next.x, next.y)){
+                    config = new Point2(next.x - p.x, next.y - p.y);
+                }else if(world.tile(p.x, p.y) != null && world.tile(p.x, p.y).block() != block){
+                    config = -1;
+                }
             }
 
             BuildPlan plan = new BuildPlan(p.x, p.y, rot, block, config);
@@ -3051,6 +3056,7 @@ public abstract class InputHandler implements InputProcessor, GestureListener{
     void iterateLine(int startX, int startY, int endX, int endY, Cons<PlaceLine> cons){
         Seq<Point2> points;
         boolean diagonal = Core.input.keyDown(Binding.diagonalPlacement);
+        if(block instanceof ItemBridge && Core.input.shift()) diagonal = false;
 
         if(Core.settings.getBool("swapdiagonal") && mobile){
             diagonal = !diagonal;
@@ -3107,12 +3113,12 @@ public abstract class InputHandler implements InputProcessor, GestureListener{
             if((!overrideLineRotation || diagonal) && !(block != null && block.ignoreLineRotation && !mobile)){
                 int result = baseRotation;
                 if(next != null){
-                    result = Tile.relativeTo(point.x, point.y, next.x, next.y);
+                    result = Tile.relativeTo((float)point.x, point.y, next.x, next.y);
                 }else if(endRotation != -1){
                     result = endRotation;
                 }else if(block.conveyorPlacement && i > 0){
                     Point2 prev = points.get(i - 1);
-                    result = Tile.relativeTo(prev.x, prev.y, point.x, point.y);
+                    result = Tile.relativeTo((float)prev.x, prev.y, point.x, point.y);
                 }
                 if(result != -1){
                     line.rotation = result;

@@ -196,6 +196,9 @@ public class Binding{
     /** Area upgrade, focus mark, map search: unbound by default, the panel has buttons for them. */
     area_upgrade = KeyBind.add("area_upgrade", KeyCode.unset),
     focus_mark = KeyBind.add("focus_mark", KeyCode.unset),
+    /** Map ping menu and grief report, shared with allies on the client. */
+    map_ping = KeyBind.add("map_ping", KeyCode.unset),
+    grief_mark = KeyBind.add("grief_mark", KeyCode.unset),
     map_search = KeyBind.add("map_search", KeyCode.unset)
     ;
 

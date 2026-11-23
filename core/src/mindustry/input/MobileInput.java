@@ -283,6 +283,7 @@ public class MobileInput extends InputHandler implements GestureListener{
             t.bottom().left();
             t.button(Icon.cancel, Styles.cleari, () -> {
                 if(!player.dead()){
+                    mindustry.client.fallen.CustomBuildLogic.cancelPending();
                     player.unit().clearBuilding();
                 }
                 selectPlans.clear();

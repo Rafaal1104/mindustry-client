@@ -4,29 +4,26 @@ import arc.Core;
 import arc.Events;
 import arc.scene.ui.Label;
 import arc.scene.ui.Slider;
-import arc.graphics.g2d.Draw;
-import arc.graphics.g2d.Lines;
 import arc.struct.IntSet;
 import arc.struct.Seq;
 import arc.util.Time;
 import mindustry.content.Blocks;
 import mindustry.entities.units.BuildPlan;
-import mindustry.game.EventType.Trigger;
 import mindustry.game.EventType.WorldLoadEvent;
 import mindustry.gen.Building;
 import mindustry.gen.Unit;
-import mindustry.graphics.Layer;
-import mindustry.graphics.Pal;
 import mindustry.ui.dialogs.BaseDialog;
 import mindustry.world.Block;
+import mindustry.world.Build;
+import mindustry.game.Team;
 import mindustry.world.Tile;
 import mindustry.world.blocks.storage.CoreBlock;
 
 import static mindustry.Vars.control;
 import static mindustry.Vars.player;
 import static mindustry.Vars.state;
-import static mindustry.Vars.tilesize;
 import static mindustry.Vars.world;
+import static mindustry.Vars.fogControl;
 
 /**
  * "Ставить схему с очисткой": a schematic plan blocked by our own buildings breaks them
@@ -40,7 +37,6 @@ public class CustomBuildLogic {
 
     static {
         Events.on(WorldLoadEvent.class, e -> pending.clear());
-        Events.run(Trigger.draw, CustomBuildLogic::draw);
     }
 
     private static class Pending {
@@ -87,14 +83,25 @@ public class CustomBuildLogic {
     private static boolean blockers(BuildPlan plan, Seq<Building> out) {
         Block block = plan.block;
         Tile origin = world.tile(plan.x, plan.y);
-        if (origin == null || !block.canPlaceOn(origin, player.team(), plan.rotation)) return false;
+        Team team = player.team();
+        if(origin == null || !block.canPlaceOn(origin, team, plan.rotation) || block.isFloor()) return false;
+        if(!state.isEditor() && (!block.environmentBuildable() || !block.isPlaceable() &&
+            !(state.rules.waves && team == state.rules.waveTeam && block.isVisible()))) return false;
+        if(!block.ignoreBuildDarkness && world.getDarkness(plan.x, plan.y) >= 3) return false;
+        if(!state.isEditor() && !block.requiresWater && !block.placeableLiquid &&
+            !Build.contactsShallows(plan.x, plan.y, block)) return false;
+        if(block.isOverPlacementLimit(team)) return false;
+        if(state.rules.placeRangeCheck && !state.isEditor() && Build.getEnemyOverlap(block, team, plan.x, plan.y) != null) return false;
 
         int off = (block.size - 1) / 2;
         for (int dx = 0; dx < block.size; dx++) {
             for (int dy = 0; dy < block.size; dy++) {
                 Tile tile = world.tile(plan.x + dx - off, plan.y + dy - off);
-                if (tile == null) return false;
-                if (tile.floor().isDeep() && !block.floating && !block.requiresWater && !block.placeableLiquid) return false;
+                if(tile == null || block.size == 2 && world.getDarkness(tile.x, tile.y) >= 3) return false;
+                if(state.rules.staticFog && state.rules.fog && !fogControl.isDiscovered(team, tile.x, tile.y)) return false;
+                if(!tile.floor().placeableOn && !block.ignoreBuildDarkness) return false;
+                if(block.requiresWater && tile.floor().liquidDrop != mindustry.content.Liquids.water) return false;
+                if(!state.isEditor() && tile.floor().isDeep() && !block.floating && !block.requiresWater && !block.placeableLiquid) return false;
 
                 Building build = tile.build;
                 if (build == null) {
@@ -118,12 +125,17 @@ public class CustomBuildLogic {
     public static void placeAfterCleanup(BuildPlan plan, IntSet broken) {
         Unit unit = player.unit();
         if (unit == null || plan.block == null || isUnplaceable(plan.block)) return;
+        if(plan.build() != null && plan.build().team == player.team() && plan.block == plan.build().block
+            && plan.x == plan.build().tileX() && plan.y == plan.build().tileY()
+            && (!plan.block.rotate || plan.rotation == plan.build().rotation)) return;
 
         Seq<Building> clear = new Seq<>();
         if (!blockers(plan, clear) || clear.isEmpty()) return;
 
         for (Building b : clear) {
-            if (broken.add(b.pos())) unit.addBuild(new BuildPlan(b.tileX(), b.tileY()));
+            if(broken.add(b.pos()) && !breakQueued(unit, b)){
+                unit.addBuild(new BuildPlan(b.tileX(), b.tileY()));
+            }
         }
         pending.removeAll(p -> p.plan.x == plan.x && p.plan.y == plan.y);
         pending.add(new Pending(plan, unit));
@@ -149,9 +161,11 @@ public class CustomBuildLogic {
                 continue;
             }
 
-            // Someone put a foreign block there, or the break was cancelled and nothing is in the way anymore
             Seq<Building> clear = new Seq<>();
-            if (!blockers(plan, clear) || clear.isEmpty()) pending.remove(i);
+            if(!blockers(plan, clear) || clear.isEmpty() ||
+                clear.contains(b -> !breakQueued(unit, b))){
+                pending.remove(i);
+            }
         }
     }
 
@@ -180,17 +194,14 @@ public class CustomBuildLogic {
         settingsDialog.show();
     }
 
-    /** Outlines of the plans waiting for their footprint. */
-    private static void draw() {
-        if (pending.isEmpty() || !state.isGame()) return;
-        Draw.z(Layer.plans);
-        Lines.stroke(1f);
-        Draw.color(Pal.accent, 0.4f + 0.4f * (float)Math.abs(Math.sin(Time.time / 12f)));
-        for (Pending p : pending) {
-            BuildPlan plan = p.plan;
-            float size = plan.block.size * tilesize;
-            Lines.rect(plan.drawx() - size / 2f, plan.drawy() - size / 2f, size, size);
+    private static boolean breakQueued(Unit unit, Building building){
+        for(BuildPlan plan : unit.plans){
+            if(plan.breaking && plan.x == building.tileX() && plan.y == building.tileY()) return true;
         }
-        Draw.reset();
+        return false;
+    }
+
+    public static void cancelPending(){
+        pending.clear();
     }
 }

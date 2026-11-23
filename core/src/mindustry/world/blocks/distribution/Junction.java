@@ -27,7 +27,6 @@ public class Junction extends Block{
 
     // FINISHME: Rework to work with junctions with size >1
     static float baseOffsetX, baseOffsetY;
-    static boolean drawItems = false;
     static final float itemSizeScaled = itemSize / 4f;
 
     public static boolean flowRateByDirection = Core.settings != null && Core.settings.getBool("junctionflowratedirection", false);
@@ -41,13 +40,9 @@ public class Junction extends Block{
         group = BlockGroup.transportation;
         unloadable = false;
         noUpdateDisabled = true;
-        //Disabled for the drawItems setting
-        // drawCached = true;
-        // drawDynamic = false;
     }
 
-    public static void setBaseOffset(int mode){ // -1 left, 0 disable, 1 right
-        drawItems = mode != 0;
+    public static void setBaseOffset(int mode){ // -1 left, 0 center, 1 right
         float y = -tilesize / 3.1f * mode;
         baseOffsetX = -tilesize/2f;
         baseOffsetY = y;
@@ -210,10 +205,8 @@ public class Junction extends Block{
         public void draw(){
             super.draw();
             float alpha = HiddenItems.alpha;
-            if(!drawItems && alpha <= 0.01f) return;
+            if(alpha <= 0.01f) return;
             Draw.z(Layer.blockOver);
-            // junctionview offset keeps full opacity until the hidden-item slider is on
-            float drawAlpha = alpha > 0.01f ? alpha : 1f;
             float now = Time.time;
             float realSpeed = speed / timeScale, baseX = baseOffsetX, baseY = baseOffsetY, itemX = tilesize, itemY = 0;
             float temp;
@@ -225,7 +218,7 @@ public class Junction extends Block{
                     Item item = content.item(BufferItem.item(l));
                     if(item == null) continue;
                     Draw.color();
-                    Draw.alpha(drawAlpha);
+                    Draw.alpha(alpha);
                     Draw.rect(item.fullIcon,
                         bx + itemX * progress,
                         by + itemY * progress,

@@ -1,6 +1,7 @@
 package mindustry.client.fallen;
 
 import arc.*;
+import arc.func.Boolp;
 import arc.graphics.*;
 import arc.graphics.g2d.*;
 import arc.input.*;
@@ -21,6 +22,7 @@ import mindustry.input.*;
 import mindustry.type.*;
 import mindustry.ui.*;
 import mindustry.ui.dialogs.*;
+import mindustry.world.blocks.defense.*;
 import mindustry.world.meta.*;
 
 import static mindustry.Vars.*;
@@ -62,6 +64,8 @@ public class SquadCommander{
         Tactic tactic = Tactic.hold;
         boolean retreatAll;
         @Nullable Teamc focus;
+        /** Цель фокуса выбрана автоосадой, а не игроком: её можно сменить на более важную. */
+        boolean autoFocus;
         float advanceX, advanceY, fallX, fallY, lastLayout, lastStep, hp, maxHp;
         int laidOut, lost, healing;
 
@@ -78,6 +82,7 @@ public class SquadCommander{
             tactic = Tactic.hold;
             retreatAll = false;
             focus = null;
+            autoFocus = false;
             fallX = fallY = hp = maxHp = 0f;
             laidOut = lost = healing = 0;
         }
@@ -117,6 +122,8 @@ public class SquadCommander{
     private static final int squadCount = 3;
     private static final float rankGap = 7f * tilesize, healLoadPenalty = 8f * tilesize;
     private static final float layoutCooldown = 5f * 60f, stepCooldown = 4f * 60f, fallCooldown = 5f * 60f;
+    /** Автоосада: важные постройки ищем в этом радиусе от линии, прочие (стены и т.п.) - только вплотную к ней. */
+    private static final float siegeRadius = 20f * tilesize, obstacleRadius = 8f * tilesize;
     private static final float advanceStep = 8f * tilesize, fallStep = 12f * tilesize, enemyRadius = 32f * tilesize, contactRadius = 25f * tilesize, coreKeepOut = 15f * tilesize;
 
     private static boolean hooked, drawing, dragging;
@@ -199,7 +206,8 @@ public class SquadCommander{
     /** Выбрать отряд; у пустого сразу открывается рисование линии. */
     private static void select(int index){
         current = index;
-        if(overlay == null && cur().members.isEmpty()) openTool(Tool.draw);
+        if(cur().members.isEmpty()) openTool(Tool.draw);
+        else closeOverlay();
     }
 
     private static void openTool(Tool t){
@@ -305,6 +313,7 @@ public class SquadCommander{
             translate(s, previewX, previewY);
         }
         previewX = previewY = previewAngle = 0f;
+        closeOverlay();
     }
 
     private static void pickFocus(){
@@ -314,7 +323,7 @@ public class SquadCommander{
             ui.showInfoFade(Core.bundle.get("client.squad.notarget"));
             return;
         }
-        setFocus(cur(), t, Core.input.keyDown(KeyCode.shiftLeft));
+        setFocus(cur(), t, Core.input.keyDown(KeyCode.shiftLeft), false);
         closeOverlay();
     }
 
@@ -579,6 +588,7 @@ public class SquadCommander{
                     comeBack(s, m, u);
                 }
             }
+            if(m.state == State.retreat && healGone(m)) retreat(s, m, u);
             if(m.state == State.retreat) healing++;
         }
         s.hp = hp;
@@ -592,6 +602,7 @@ public class SquadCommander{
         }
 
         if(s.focus != null && !targetAlive(s.focus)) endFocus(s);
+        siege(s);
 
         boolean changed = s.members.size != s.laidOut && Math.abs(s.members.size - s.laidOut) * 10 >= s.laidOut;
         if(changed && Time.time - s.lastLayout >= layoutCooldown && Core.settings.getBool("squad-closegaps", true)) layout(s, false);
@@ -701,7 +712,7 @@ public class SquadCommander{
 
     // ---------- фокус огня ----------
 
-    private static void setFocus(Squad s, Teamc target, boolean onlyInRange){
+    private static void setFocus(Squad s, Teamc target, boolean onlyInRange, boolean auto){
         endFocus(s);
         for(Member m : s.members){
             if(m.state != State.hold) continue;
@@ -712,24 +723,127 @@ public class SquadCommander{
             order(m.id, target.getX(), target.getY(), target);
         }
         if(s.focusIds.isEmpty()){
-            ui.showInfoFade(Core.bundle.get("client.squad.nofocus"));
+            if(!auto) ui.showInfoFade(Core.bundle.get("client.squad.nofocus"));
             return;
         }
         s.focus = target;
+        s.autoFocus = auto;
+    }
+
+    // ---------- автоосада ----------
+
+    /** Порядок целей: турели, затем ремонтники, затем ядро, затем прочие постройки на пути. Меньше - важнее. */
+    private static int siegePriority(Building b){
+        if(b.block.flags.contains(BlockFlag.turret)) return 0;
+        if(b.block.flags.contains(BlockFlag.repair) || b.block instanceof MendProjector || b.block instanceof RegenProjector) return 1;
+        if(b.block.flags.contains(BlockFlag.core)) return 2;
+        return 3;
+    }
+
+    /** Отряд сам выбирает вражескую постройку у линии и бьёт её фокусом; ручной фокус игрока не трогаем. */
+    private static void siege(Squad s){
+        if(!Core.settings.getBool("squad-siege", true)){
+            if(s.autoFocus && s.focus != null) endFocus(s);
+            return;
+        }
+        if(s.retreatAll || (s.focus != null && !s.autoFocus)) return;
+
+        Building best = siegeTarget(s);
+        if(best == null){
+            if(s.focus != null) endFocus(s);
+            return;
+        }
+        if(best == s.focus) return;
+        //нынешнюю цель того же приоритета добиваем, чтобы отряд не метался между соседними постройками
+        if(s.focus instanceof Building now && siegePriority(now) <= siegePriority(best) && lineDst(s, now.x, now.y) <= siegeRange(now)) return;
+        setFocus(s, best, false, true);
+    }
+
+    private static float siegeRange(Building b){
+        return siegePriority(b) < 3 ? siegeRadius : obstacleRadius;
+    }
+
+    private static @Nullable Building siegeTarget(Squad s){
+        FloatSeq line = s.line;
+        if(line.size < 4) return null;
+        float minX = Float.MAX_VALUE, minY = Float.MAX_VALUE, maxX = -Float.MAX_VALUE, maxY = -Float.MAX_VALUE;
+        for(int i = 0; i < line.size; i += 2){
+            minX = Math.min(minX, line.items[i]);
+            maxX = Math.max(maxX, line.items[i]);
+            minY = Math.min(minY, line.items[i + 1]);
+            maxY = Math.max(maxY, line.items[i + 1]);
+        }
+
+        //постройки, до которых кто-то из отряда уже не смог дойти, не берём - иначе отряд упрётся в них навсегда
+        IntSet unreachable = new IntSet();
+        boolean anyGround = false;
+        for(Member m : s.members){
+            Unit u = Groups.unit.getByID(m.id);
+            if(u == null || !u.type.canAttack || !u.type.targetGround) continue;
+            anyGround = true;
+            if(u.controller() instanceof CommandAI ai) unreachable.addAll(ai.unreachableBuildings);
+        }
+        if(!anyGround) return null;
+
+        Seq<Building> found = new Seq<>();
+        for(Teams.TeamData data : state.teams.present){
+            if(!hostile(data.team) || data.buildingTree == null) continue;
+            data.buildingTree.intersect(minX - siegeRadius, minY - siegeRadius, maxX - minX + siegeRadius * 2f, maxY - minY + siegeRadius * 2f, found);
+        }
+
+        Building best = null;
+        int bestPriority = Integer.MAX_VALUE;
+        float bestDst = Float.MAX_VALUE;
+        for(Building b : found){
+            if(!b.isValid() || b.inFogTo(player.team()) || unreachable.contains(b.pos())) continue;
+            int priority = siegePriority(b);
+            if(priority > bestPriority) continue;
+            float dst = lineDst(s, b.x, b.y);
+            if(dst > siegeRange(b)) continue;
+            if(priority < bestPriority || dst < bestDst){
+                best = b;
+                bestPriority = priority;
+                bestDst = dst;
+            }
+        }
+        return best;
+    }
+
+    /** Расстояние от точки до ломаной линии отряда. */
+    private static float lineDst(Squad s, float x, float y){
+        FloatSeq line = s.line;
+        float best = Float.MAX_VALUE;
+        for(int i = 2; i < line.size; i += 2){
+            Vec2 p = Intersector.nearestSegmentPoint(line.items[i - 2], line.items[i - 1], line.items[i], line.items[i + 1], x, y, Tmp.v4);
+            best = Math.min(best, p.dst(x, y));
+        }
+        return best;
     }
 
     /** Focus fire for every formed squad (focus marks). Quiet: no "nobody can hit" popup. */
     public static void focusAll(Teamc target){
         if(target == null) return;
+        for(Unit unit : control.input.selectedUnits){
+            if(usable(unit) && canHit(unit, target) && !anySquadContains(unit.id)){
+                order(unit.id, target.getX(), target.getY(), target);
+            }
+        }
         for(Squad s : squads){
-            if(s.members.isEmpty()) continue;
+            if(s.members.isEmpty() || s.retreatAll) continue;
             boolean any = false;
             for(Member m : s.members){
                 Unit u = Groups.unit.getByID(m.id);
                 if(u != null && m.state == State.hold && canHit(u, target)){ any = true; break; }
             }
-            if(any) setFocus(s, target, false);
+            if(any) setFocus(s, target, false, false);
         }
+    }
+
+    private static boolean anySquadContains(int id){
+        for(Squad s : squads){
+            if(s.members.contains(member -> member.id == id)) return true;
+        }
+        return false;
     }
 
     public static void endFocusAll(){
@@ -737,12 +851,13 @@ public class SquadCommander{
     }
 
     private static boolean canHit(Unit u, Teamc target){
-        if(!u.type.canAttack) return false;
+        if(!u.type.canAttack || !hostile(target.team())) return false;
         return target instanceof Unit e ? u.canTarget(e) : u.type.targetGround;
     }
 
     private static void endFocus(Squad s){
         s.focus = null;
+        s.autoFocus = false;
         for(Member m : s.members){
             if(s.focusIds.contains(m.id) && m.state == State.hold && !s.retreatAll) order(m.id, m.slotX, m.slotY, null);
         }
@@ -754,11 +869,60 @@ public class SquadCommander{
     private static void retreat(Squad s, Member m, Unit u){
         Building heal = healPoint(u);
         if(heal == null) return;
+        if(m.healPos != -1) healLoad.increment(m.healPos, -1);
         m.state = State.retreat;
         m.healPos = heal.pos();
         healLoad.increment(m.healPos);
         s.focusIds.remove(m.id);
-        order(m.id, heal.x, heal.y, null);
+        Vec2 spot = healSpot(u, heal, new Vec2());
+        order(m.id, spot.x, spot.y, null);
+    }
+
+    /** Ремонтная точка, к которой шёл юнит, разрушена или сменила команду - пора искать другую. */
+    private static boolean healGone(Member m){
+        if(m.healPos == -1) return false;
+        Building b = world.build(m.healPos);
+        return b == null || !b.isValid() || b.team != player.team();
+    }
+
+    /**
+     * Куда вести раненого: сам ремонтный блок твёрдый, точка в его центре для наземного юнита недостижима,
+     * поэтому берём ближайшую к юниту проходимую клетку вокруг здания. Крупным юнитам кольцо отодвигается на их размер.
+     */
+    private static Vec2 healSpot(Unit u, Building heal, Vec2 out){
+        out.set(heal.x, heal.y);
+        if(u.type.flying || u.isFlying()) return out;
+
+        int size = heal.block.size;
+        int minX = heal.tileX() - (size - 1) / 2, maxX = heal.tileX() + size / 2;
+        int minY = heal.tileY() - (size - 1) / 2, maxY = heal.tileY() + size / 2;
+        int first = Math.max(1, Mathf.ceil(u.hitSize / tilesize / 2f));
+
+        for(int ring = first; ring <= first + 5; ring++){
+            float bestDst = Float.MAX_VALUE;
+            int bx = 0, by = 0;
+            for(int tx = minX - ring; tx <= maxX + ring; tx++){
+                for(int ty = minY - ring; ty <= maxY + ring; ty++){
+                    //только сам периметр кольца
+                    if(tx != minX - ring && tx != maxX + ring && ty != minY - ring && ty != maxY + ring) continue;
+                    if(!walkable(u, tx, ty)) continue;
+                    float d = Mathf.dst2(u.x, u.y, tx * tilesize, ty * tilesize);
+                    if(d < bestDst){
+                        bestDst = d;
+                        bx = tx;
+                        by = ty;
+                    }
+                }
+            }
+            if(bestDst != Float.MAX_VALUE) return out.set(bx * tilesize, by * tilesize);
+        }
+        //вокруг всё занято - пусть идёт к центру, хоть подойдёт ближе
+        return out;
+    }
+
+    private static boolean walkable(Unit u, int tx, int ty){
+        var tile = world.tile(tx, ty);
+        return tile != null && !tile.solid() && u.canPass(tx, ty);
     }
 
     private static void comeBack(Squad s, Member m, Unit u){
@@ -856,6 +1020,13 @@ public class SquadCommander{
             if(o.ids.isEmpty()) queue.remove(0);
             if(batch.isEmpty()) continue;
             if(o.target != null && !targetAlive(o.target)) continue;
+            IntSeq move = new IntSeq();
+            for(int i = 0; i < batch.size; i++){
+                Unit unit = Groups.unit.getByID(batch.get(i));
+                if(unit.controller() instanceof CommandAI ai && ai.currentCommand() != UnitCommand.moveCommand
+                    && unit.type.allowCommand(unit, UnitCommand.moveCommand)) move.add(unit.id);
+            }
+            if(!move.isEmpty()) Call.setUnitCommand(player, move.toArray(), UnitCommand.moveCommand);
             Call.commandUnits(player, batch.toArray(), o.target instanceof Building b ? b : null, o.target instanceof Unit u ? u : null, new Vec2(o.x, o.y), false, true);
             nextSend = Time.millis() + sendIntervalMs;
             return;
@@ -974,18 +1145,18 @@ public class SquadCommander{
 
         p.table(row -> {
             row.defaults().pad(1f).size(36f);
-            action(row, Icon.pencilSmall, "client.squad.btn.redraw", () -> openTool(Tool.draw));
+            action(row, Icon.pencilSmall, "client.squad.btn.redraw", () -> openTool(Tool.draw), () -> overlay != null && tool == Tool.draw);
             action(row, Icon.moveSmall, "client.squad.btn.move", () -> {
                 if(overlay != null && tool == Tool.move) closeOverlay();
                 else if(cur().members.any()) openTool(Tool.move);
-            });
+            }, () -> overlay != null && tool == Tool.move);
             action(row, Icon.commandAttackSmall, "client.squad.btn.focus", () -> {
                 if(cur().focus != null) endFocus(cur());
                 else if(cur().members.any()) openTool(Tool.focus);
-            });
+            }, () -> cur().focus != null || overlay != null && tool == Tool.focus);
             action(row, Icon.undoSmall, "client.squad.btn.retreat", () -> {
                 if(cur().members.any()) toggleRetreatAll(cur());
-            });
+            }, () -> cur().retreatAll);
             action(row, Icon.settingsSmall, "client.squad.settings", SquadCommander::showSettings);
             action(row, Icon.trashSmall, "client.squad.btn.disband", SquadCommander::disband);
         }).row();
@@ -1010,11 +1181,15 @@ public class SquadCommander{
                 s.lastStep = -999f;
             }
         }).get();
-        b.update(() -> b.setChecked(cur().tactic == t));
+        b.update(() -> b.setChecked(overlay != null && tool == Tool.advance ? t == Tactic.advance : cur().tactic == t));
     }
 
     private static void action(Table row, arc.scene.style.Drawable icon, String tip, Runnable run){
         row.button(icon, Styles.clearNonei, run).tooltip(Core.bundle.get(tip));
+    }
+
+    private static void action(Table row, arc.scene.style.Drawable icon, String tip, Runnable run, Boolp checked){
+        row.button(icon, Styles.clearTogglei, run).checked(b -> checked.get()).tooltip(Core.bundle.get(tip));
     }
 
     public static void showSettings(){
@@ -1033,6 +1208,7 @@ public class SquadCommander{
             check(t, "squad-ranks", "client.squad.set.ranks");
             check(t, "squad-reinforce", "client.squad.set.reinforce");
             check(t, "squad-closegaps", "client.squad.set.closegaps");
+            check(t, "squad-siege", "client.squad.set.siege");
             t.add(Core.bundle.get("client.squad.key")).row();
         });
         settingsDialog.show();

@@ -316,6 +316,9 @@ abstract class PlayerComp implements UnitController, Entityc, Syncc, Timerc, Dra
 
         if(this.unit == unit) return;
         var oldUnit = this.unit; // Unit we are swapping from
+        if(!headless && isLocal()){
+            boosting = unit != null && unit.type.canBoost && Core.settings.getBool("autoboost", false);
+        }
 
         //save last command this unit had
         if(unit != null && unit.controller() instanceof CommandAI ai){

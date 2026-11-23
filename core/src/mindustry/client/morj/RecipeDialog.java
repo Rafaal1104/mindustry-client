@@ -52,15 +52,17 @@ public class RecipeDialog extends BaseDialog{
 
         cont.table(side -> {
             side.top();
-            search = side.field("", text -> refill()).growX().get();
+            String query = search == null ? "" : search.getText();
+            search = side.field(query, text -> refill()).growX().get();
             search.setMessageText("@client.recipe.search");
             ScrollPane pane = side.pane(items -> {
                 list = items.top().left();
             }).grow().padTop(6f).get();
             pane.setScrollingDisabledX(true);
-        }).width(230f).growY().padRight(8f);
+        }).width(Math.min(230f, Core.scene.getWidth() * 0.30f)).growY().padRight(8f);
 
-        body = cont.table().grow().top().left().get();
+        ScrollPane details = cont.pane(table -> body = table.top().left()).grow().get();
+        details.setScrollingDisabledX(false);
         refill();
         showSelected();
     }
@@ -152,11 +154,11 @@ public class RecipeDialog extends BaseDialog{
             list.button(button -> {
                 button.left();
                 button.image(good.uiIcon).size(24f).padRight(6f);
-                button.add(good.localizedName).growX().left();
+                button.add(good.localizedName).wrap().growX().left().padRight(4f);
             }, Styles.clearTogglei, () -> {
                 selected = pick;
                 showSelected();
-            }).checked(b -> selected == pick).growX().height(32f).padBottom(2f).row();
+            }).checked(b -> selected == pick).growX().minHeight(38f).padBottom(2f).row();
         }
         if(!any) list.add("@client.recipe.none").color(Color.lightGray);
     }
@@ -196,7 +198,8 @@ public class RecipeDialog extends BaseDialog{
                         inputs.image(flow.what.uiIcon).size(18f);
                         String text = format(flow.perSec) + Core.bundle.get("client.recipe.per");
                         if(flow.optional) text += " " + Core.bundle.get("client.recipe.opt");
-                        inputs.add(text).padRight(8f);
+                        inputs.add(flow.what.localizedName).left().padRight(8f);
+                        inputs.add(text).left().row();
                     }
                 }).left().padTop(2f).row();
                 card.button("@client.recipe.use", () -> {
@@ -216,7 +219,7 @@ public class RecipeDialog extends BaseDialog{
         walk(selected, 1f, 0, new ObjectSet<>(), lines, raw, root);
 
         body.add("@client.recipe.balance").color(Pal.accent).padTop(8f).left().row();
-        body.pane(tree -> {
+        body.table(tree -> {
             tree.top().left();
             for(Line line : lines){
                 tree.table(row -> {
@@ -242,7 +245,7 @@ public class RecipeDialog extends BaseDialog{
                     }).left().row();
                 }
             }
-        }).growX().height(180f).padTop(4f);
+        }).growX().padTop(4f);
     }
 
     private void walk(UnlockableContent what, float need, int depth, ObjectSet<UnlockableContent> stack, Seq<Line> lines, ObjectFloatMap<UnlockableContent> raw, Recipe forced){

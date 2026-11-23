@@ -76,6 +76,11 @@ public class FocusMarks{
         return own() != null;
     }
 
+    public static @Nullable Teamc ownTarget(){
+        Mark mark = player == null ? null : own();
+        return mark == null ? null : mark.target;
+    }
+
     private static @Nullable Mark own(){
         return marks.find(m -> m.owner == player.id);
     }
@@ -189,7 +194,7 @@ public class FocusMarks{
         Draw.reset();
     }
 
-    private static void text(String s, float x, float y, float alpha){
+    static void text(String s, float x, float y, float alpha){
         Font font = Fonts.outline;
         boolean ints = font.usesIntegerPositions();
         font.setUseIntegerPositions(false);
@@ -208,6 +213,11 @@ public class FocusMarks{
             check("focusmark-squad", true, "@client.mark.set.squad");
             check("focusmark-share", true, "@client.mark.set.share");
             check("focusmark-allysquad", false, "@client.mark.set.allysquad");
+            check("pings-share", true, "@client.ping.set.share");
+            check("pings-receive", true, "@client.ping.set.receive");
+            check("pings-sound", true, "@client.ping.set.sound");
+            check("griefmark-share", true, "@client.grief.set.share");
+            check("griefmark-receive", true, "@client.grief.set.receive");
             settingsDialog.addCloseButton();
         }
         settingsDialog.show();

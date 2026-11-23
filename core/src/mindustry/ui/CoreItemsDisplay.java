@@ -94,7 +94,7 @@ public class CoreItemsDisplay extends Table{
 
         if(chartShown && !usedItems.isEmpty()){
             row();
-            add(CoreChart.widget()).growX().height(58f).colspan(8).padTop(3f);
+            add(CoreChart.widget()).growX().colspan(8).padTop(3f);
         }
     }
 

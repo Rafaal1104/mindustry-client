@@ -121,6 +121,13 @@ public class StackConveyor extends Block implements Autotiler{
     public class StackConveyorBuild extends Building{
         public int state, blendprox;
 
+        public boolean outputsTo(Building other){
+            if(other == null || other.team != team) return false;
+            if(state != stateUnload) return other == front() && other instanceof StackConveyorBuild;
+            return outputRouter ? proximity.contains(other, true) && (lastItem == null || canDump(other, lastItem))
+                : other == front();
+        }
+
         public int link = -1;
         public float cooldown;
         public Item lastItem;

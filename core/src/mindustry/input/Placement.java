@@ -22,6 +22,10 @@ import static mindustry.Vars.*;
 interface BridgePlacer{
     boolean unlockedNow();
 
+    int range();
+
+    boolean canPlace(BuildPlan plan);
+
     boolean positionsValid(int x1, int y1, int x2, int y2);
 
     void applyToPlans(BuildPlan cur, BuildPlan other);
@@ -40,12 +44,23 @@ class ItemBridgePlacer implements BridgePlacer{
     }
 
     @Override
+    public int range(){
+        return bridge.range;
+    }
+
+    @Override
+    public boolean canPlace(BuildPlan plan){
+        return Placement.canHostBridge(bridge, plan.x, plan.y, plan.rotation);
+    }
+
+    @Override
     public boolean positionsValid(int x1, int y1, int x2, int y2){
         return bridge.positionsValid(x1, y1, x2, y2);
     }
 
     @Override
     public void applyToPlans(BuildPlan cur, BuildPlan other){
+        if(cur.tile() != null && cur.tile().block() != bridge && cur.config == null) cur.config = -1;
         cur.block = bridge;
         other.block = bridge;
         other.config = new Point2(cur.x - other.x, cur.y - other.y);
@@ -65,6 +80,16 @@ class DirectionBridgePlacer implements BridgePlacer{
     }
 
     @Override
+    public int range(){
+        return bridge.range;
+    }
+
+    @Override
+    public boolean canPlace(BuildPlan plan){
+        return Placement.canHostBridge(bridge, plan.x, plan.y, plan.rotation);
+    }
+
+    @Override
     public boolean positionsValid(int x1, int y1, int x2, int y2){
         return bridge.positionsValid(x1, y1, x2, y2);
     }
@@ -73,6 +98,7 @@ class DirectionBridgePlacer implements BridgePlacer{
     public void applyToPlans(BuildPlan cur, BuildPlan other){
         cur.block = bridge;
         other.block = bridge;
+        other.rotation = Tile.relativeTo((float)other.x, other.y, cur.x, cur.y);
     }
 }
 
@@ -449,7 +475,7 @@ public class Placement{
                 Tile t = world.tile(tx, ty);
                 if(t == null || t.build != null) return false;
                 if(t.block() != Blocks.air) return false;
-                if(t.floor().isDeep() && !block.placeableLiquid) return false;
+                if(t.floor().isDeep() && !block.floating && !block.placeableLiquid) return false;
             }
         }
         return true;
@@ -613,7 +639,7 @@ public class Placement{
                 if(conveyor.contains(packed) || used.contains(packed)) return false;
                 Tile t = world.tile(tx, ty);
                 if(t == null) return false;
-                if(t.floor().isDeep() && !block.placeableLiquid) return false;
+                if(t.floor().isDeep() && !block.floating && !block.placeableLiquid) return false;
                 if(t.build != null){
                     if(removing.contains(t.build)) continue; // node being relocated, tile will be empty
                     return false; // never break other buildings
@@ -765,7 +791,7 @@ public class Placement{
         Pools.freeAll(points);
         points.clear();
         if(conveyors && Core.settings.getBool("conveyorpathfinding")){
-            if(astar(startX, startY, endX, endY)){
+            if(astar(startX, startY, endX, endY, Core.settings.getBool("vanillaplacementpath", false))){
                 return points;
             }else{
                 return normalizeLine(startX, startY, endX, endY);
@@ -783,12 +809,10 @@ public class Placement{
         if(block == null) return false;
         Tile t = world.tile(x, y);
         if(t == null) return false;
-        if(t.block() == block) return true;
-        if(t.build != null && t.build.block == block) return true;
+        if(t.block() == block) return t.interactable(player.team());
         // hard obstacle — cannot stand a bridge here
-        if(!t.block().alwaysReplace && (block == null || !block.canReplace(t.block()))) return false;
-        if(t.floor().isDeep() && !block.placeableLiquid) return false;
-        return Build.validPlace(block, player.team(), x, y, rotation, false);
+        if(t.floor().isDeep() && !block.floating && !block.placeableLiquid) return false;
+        return Build.validPlaceIgnoreUnits(block, player.team(), x, y, rotation, true, true);
     }
 
     /**
@@ -807,7 +831,7 @@ public class Placement{
         try{
             Pools.freeAll(points);
             points.clear();
-            if(!astar(startX, startY, endX, endY)) return false;
+            if(!astar(startX, startY, endX, endY, false)) return false;
             for(Point2 p : points){
                 out.add(new Point2(p.x, p.y));
             }
@@ -1275,26 +1299,24 @@ public class Placement{
     }
 
     public static boolean isSidePlace(Seq<BuildPlan> plans){
-        return plans.size > 1 && Mathf.mod(Tile.relativeTo(plans.first().x, plans.first().y, plans.get(1).x, plans.get(1).y) - plans.first().rotation, 2) == 1;
+        return plans.size > 1 && Mathf.mod(Tile.relativeTo((float)plans.first().x, plans.first().y, plans.get(1).x, plans.get(1).y) - plans.first().rotation, 2) == 1;
     }
 
     public static void calculateBridges(Seq<BuildPlan> plans, ItemBridge bridge){
         calculateBridges(plans, bridge, false, t -> false);
     }
 
-    private static void calculateBridges(Seq<BuildPlan> plans, BridgePlacer bridge, boolean hasJunction, Boolf<Block> avoid){
+    private static void calculateBridges(Seq<BuildPlan> plans, BridgePlacer bridge, Boolf<Block> avoid){
         //common checks
-        if(isSidePlace(plans) || plans.size == 0) return;
-
-        //check for orthogonal placement + unlocked state
-        if(!(plans.first().x == plans.peek().x || plans.first().y == plans.peek().y) || !bridge.unlockedNow()){
-            return;
-        }
-
-        smartCalculateBridges(plans, bridge, hasJunction, avoid);
+        if(plans.isEmpty() || isSidePlace(plans) || !bridge.unlockedNow()) return;
+        smartCalculateBridges(plans, bridge, avoid);
     }
 
-    private static void smartCalculateBridges(Seq<BuildPlan> plans, BridgePlacer bridge, boolean hasJunction, Boolf<Block> avoid){
+    private static boolean adjacent(BuildPlan a, BuildPlan b){
+        return Math.abs(a.x - b.x) + Math.abs(a.y - b.y) == 1;
+    }
+
+    private static void smartCalculateBridges(Seq<BuildPlan> plans, BridgePlacer bridge, Boolf<Block> avoid){
         Boolf<BuildPlan> placeable = plan ->
         (plan.placeable(player.team()) || (plan.tile() != null && plan.tile().block() == plan.block && plan.tile().interactable(player.team()))) &&  //don't count the same block as inaccessible
         !(plan != plans.first() && plan.build() != null && plan.build().rotation != plan.rotation && avoid.get(plan.tile().block()));
@@ -1303,7 +1325,6 @@ public class Placement{
 
         // Use DP for smarter bridge placement
         final int conveyorCost = 3;
-        final int junctionCost = 30;
         final int bridgeCost = 200;
         final int bridgeOverEmptyPenalty = 5;
         final int infCost = Integer.MAX_VALUE / 2; // Avoid overflow when adding
@@ -1314,43 +1335,39 @@ public class Placement{
         Arrays.fill(dp, 0, 2 * N, infCost);
         Arrays.fill(parent, 0, 2 * N, -1);
         dp[0] = 0;
-        dp[N] = bridgeCost;
+        if(placeable.get(plans.first()) && bridge.canPlace(plans.first())) dp[N] = bridgeCost;
 
         for(int i = 1; i < N; i++){
             var cur = plans.get(i);
             boolean canPlace = placeable.get(cur);
-            boolean needJunction = hasJunction && (cur.tile() == null || avoid.get(cur.tile().block()));
+            if(!canPlace) continue;
 
-            if(!canPlace && !needJunction){
-                continue;
-            }
-
-            if(canPlace){
+            if(adjacent(plans.get(i - 1), cur) && dp[i - 1] < infCost){
                 dp[i] = dp[i - 1] + conveyorCost;
-            }else{
-                dp[i] = dp[i - 1] + junctionCost;
+                parent[i] = i - 1;
             }
-            parent[i] = i - 1;
 
-            if(dp[i] < infCost && canPlace){
+            boolean bridgeEnd = bridge.canPlace(cur);
+            if(dp[i] < infCost && bridgeEnd){
                 dp[N + i] = dp[i] + bridgeCost;
                 parent[N + i] = i - 1;
             }
 
             // Consider bridges from all previous positions
-            if(i >= 2 && canPlace){
+            if(bridgeEnd && i > 0){
                 int emptyPenalty = 0;
                 if(placeable.get(plans.get(i - 1))){
                     emptyPenalty += bridgeOverEmptyPenalty;
                 }
 
-                for(int j = i - 2; j >= 0; j--){
+                for(int j = i - 1; j >= 0; j--){
                     var other = plans.get(j);
-                    if(!bridge.positionsValid(cur.x, cur.y, other.x, other.y)){
-                        break; // No need to check further back if this one is out of range
-                    }
+                    int distance = Math.abs(cur.x - other.x) + Math.abs(cur.y - other.y);
+                    if(i - j > distance || distance < 2) continue;
+                    if(distance > bridge.range()) break;
+                    if(!bridge.positionsValid(cur.x, cur.y, other.x, other.y)) continue;
 
-                    if(placeable.get(other) && !existingHopBetween(other, cur)){
+                    if(dp[N + j] < infCost){
                         int cost = dp[N + j] + bridgeCost + emptyPenalty;
                         if(dp[N + i] > cost){
                             dp[N + i] = cost;
@@ -1366,10 +1383,10 @@ public class Placement{
                 parent[i] = parent[N + i];
             }
 
-            if(canPlace && dp[i] >= infCost){
+            if(dp[i] >= infCost){
                 // Unable to connect, restart a new segment
                 dp[i] = 0;
-                dp[N + i] = bridgeCost;
+                if(bridgeEnd) dp[N + i] = bridgeCost;
             }
         }
 
@@ -1379,7 +1396,7 @@ public class Placement{
             var cur = plans.get(i);
             int p = parent[bridgeMode + i];
 
-            if(p == -1 || p == i - 1){
+            if(p == -1 || (p == i - 1 && adjacent(plans.get(p), cur))){
                 // No connection, connected by conveyor, or junction, no bridge needed
                 result.add(cur);
                 bridgeMode = 0;
@@ -1403,14 +1420,14 @@ public class Placement{
      * Signature must stay: (Seq, ItemBridge, boolean, Boolf) — see Conveyor.handlePlacementLine.
      */
     public static void calculateBridges(Seq<BuildPlan> plans, ItemBridge bridge, boolean hasJunction, Boolf<Block> avoid){
-        calculateBridges(plans, new ItemBridgePlacer(bridge), hasJunction, avoid);
+        calculateBridges(plans, new ItemBridgePlacer(bridge), avoid);
     }
 
     public static void calculateBridges(Seq<BuildPlan> plans, DirectionBridge bridge, boolean hasJunction, Boolf<Block> avoid){
-        calculateBridges(plans, new DirectionBridgePlacer(bridge), hasJunction, avoid);
+        calculateBridges(plans, new DirectionBridgePlacer(bridge), avoid);
     }
 
-    private static float tileHeuristic(Tile tile, Tile other){
+    private static float tileHeuristic(Tile tile, Tile other, boolean vanilla){
         Block block = control.input.block;
 
         if(!Build.validPlace(block, player.team(), other.x, other.y, -1)){ //-1 to allow placing right-facing conv on right-facing conv
@@ -1418,7 +1435,10 @@ public class Placement{
             //why is this 20? I forgot how A* works but isn't that a bit low? Pathfinder uses 6000 right?
             //the planner seems to work fine anyway
         }
-        //поворот бесплатный: лесенка по диагонали лучше длинного угла
+        if(vanilla && parents.containsKey(tile.pos())){
+            Tile prev = world.tile(parents.get(tile.pos(), 0));
+            if(prev != null && tile.relativeTo(prev) != other.relativeTo(tile)) return 8;
+        }
         return 1;
     }
 
@@ -1450,7 +1470,7 @@ public class Placement{
         }
     }
 
-    private static boolean astar(int startX, int startY, int endX, int endY){
+    private static boolean astar(int startX, int startY, int endX, int endY, boolean vanilla){
         Tile start = world.tile(startX, startY);
         Tile end = world.tile(endX, endY);
         if(start == end || start == null || end == null) return false;
@@ -1460,39 +1480,7 @@ public class Placement{
         parents.clear();
 
         int nodeLimit = 10000;
-        int totalNodes = 0;
-
-        //Честный A* без штрафа за повороты: все монотонные пути одной длины равны,
-        //а среди равных первыми раскрываются тайлы ближе к прямой старт-финиш -
-        //поэтому конвейер идёт "лесенкой" по диагонали, а не углом.
-        PriorityQueue<Long> queue = new PriorityQueue<>();
-        costs.put(start.pos(), 0f);
-        queue.add(astarKey(0f, start.x, start.y, startX, startY, endX, endY));
-        boolean found = false;
-        while(!queue.isEmpty() && totalNodes++ < nodeLimit){
-            long top = queue.poll();
-            Tile next = world.tile((int)top);
-            if(next == null || !closed.add(next.pos())) continue;
-            float baseCost = costs.get(next.pos(), 0f);
-            if(next == end){
-                found = true;
-                break;
-            }
-            for(Point2 point : Geometry.d4){
-                int newx = next.x + point.x, newy = next.y + point.y;
-                Tile child = world.tile(newx, newy);
-                if(child != null && !closed.contains(child.pos()) && validNode(next, child)){
-                    float c = baseCost + tileHeuristic(next, child);
-                    if(c < costs.get(child.pos(), Float.POSITIVE_INFINITY)){
-                        parents.put(child.pos(), next.pos());
-                        costs.put(child.pos(), c);
-                        queue.add(astarKey(c, newx, newy, startX, startY, endX, endY));
-                    }
-                }
-            }
-        }
-
-        if(!found) return false;
+        if(!(vanilla ? searchVanilla(start, end, nodeLimit) : searchDiagonal(start, end, nodeLimit))) return false;
         int total = 0;
 
         points.add(Pools.obtain(Point2.class, Point2::new).set(endX, endY));
@@ -1511,6 +1499,65 @@ public class Placement{
         points.reverse();
 
         return true;
+    }
+
+    private static boolean searchVanilla(Tile start, Tile end, int nodeLimit){
+        PQueue<Tile> queue = new PQueue<>(10, (a, b) -> Float.compare(
+            costs.get(a.pos(), 0f) + distanceHeuristic(a.x, a.y, end.x, end.y),
+            costs.get(b.pos(), 0f) + distanceHeuristic(b.x, b.y, end.x, end.y)));
+        queue.add(start);
+        int totalNodes = 0;
+        while(!queue.empty() && totalNodes++ < nodeLimit){
+            Tile next = queue.poll();
+            if(next == end) return true;
+            float cost = costs.get(next.pos(), 0f);
+            closed.add(next.pos());
+            for(Point2 direction : Geometry.d4){
+                Tile child = next.nearby(direction);
+                if(child != null && validNode(next, child) && closed.add(child.pos())){
+                    parents.put(child.pos(), next.pos());
+                    costs.put(child.pos(), cost + tileHeuristic(next, child, true));
+                    queue.add(child);
+                }
+            }
+        }
+        return false;
+    }
+
+    private static boolean searchDiagonal(Tile start, Tile end, int nodeLimit){
+        int totalNodes = 0;
+
+        //Честный A* без штрафа за повороты: все монотонные пути одной длины равны,
+        //а среди равных первыми раскрываются тайлы ближе к прямой старт-финиш -
+        //поэтому конвейер идёт "лесенкой" по диагонали, а не углом.
+        PriorityQueue<Long> queue = new PriorityQueue<>();
+        costs.put(start.pos(), 0f);
+        queue.add(astarKey(0f, start.x, start.y, start.x, start.y, end.x, end.y));
+        boolean found = false;
+        while(!queue.isEmpty() && totalNodes++ < nodeLimit){
+            long top = queue.poll();
+            Tile next = world.tile((int)top);
+            if(next == null || !closed.add(next.pos())) continue;
+            float baseCost = costs.get(next.pos(), 0f);
+            if(next == end){
+                found = true;
+                break;
+            }
+            for(Point2 point : Geometry.d4){
+                int newx = next.x + point.x, newy = next.y + point.y;
+                Tile child = world.tile(newx, newy);
+                if(child != null && !closed.contains(child.pos()) && validNode(next, child)){
+                    float c = baseCost + tileHeuristic(next, child, false);
+                    if(c < costs.get(child.pos(), Float.POSITIVE_INFINITY)){
+                        parents.put(child.pos(), next.pos());
+                        costs.put(child.pos(), c);
+                        queue.add(astarKey(c, newx, newy, start.x, start.y, end.x, end.y));
+                    }
+                }
+            }
+        }
+
+        return found;
     }
 
     /**
